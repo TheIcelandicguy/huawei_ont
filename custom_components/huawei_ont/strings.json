@@ -1,0 +1,49 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Huawei OptiXstar ONT",
+        "description": "Enter the connection details for your Huawei ONT router.",
+        "data": {
+          "host": "Host",
+          "username": "Username",
+          "password": "Password",
+          "scan_interval": "Scan interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to the router",
+      "invalid_auth": "Invalid username or password"
+    },
+    "abort": {
+      "already_configured": "This router is already configured"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "cpu_usage": { "name": "CPU usage" },
+      "memory_usage": { "name": "Memory usage" },
+      "wan_ip": { "name": "WAN IP address" },
+      "wan_uptime": { "name": "WAN uptime" },
+      "bytes_sent": { "name": "Bytes sent" },
+      "bytes_received": { "name": "Bytes received" },
+      "packets_sent": { "name": "Packets sent" },
+      "packets_received": { "name": "Packets received" },
+      "connected_devices": { "name": "Connected devices" },
+      "wifi_clients": { "name": "Wi-Fi clients" },
+      "lan_clients": { "name": "LAN clients" },
+      "download_rate": { "name": "Download rate" },
+      "upload_rate": { "name": "Upload rate" },
+      "optical_temperature": { "name": "Temperature" },
+      "optical_voltage": { "name": "Supply voltage" }
+    },
+    "binary_sensor": {
+      "wan_connection": { "name": "WAN connection" },
+      "ont_status": { "name": "ONT status" }
+    },
+    "button": {
+      "reboot": { "name": "Reboot" }
+    }
+  }
+}
