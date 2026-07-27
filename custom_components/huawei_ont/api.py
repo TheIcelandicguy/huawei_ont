@@ -24,6 +24,20 @@ URL_WAN_CACHE = "/html/bbsp/common/wan_list_cache_wan.asp"
 URL_WAN_STATS = "/html/bbsp/common/get_wan_list_ipwanstat.asp"
 URL_ONT_STATE = "/html/bbsp/common/ontstate.asp"
 URL_USER_DEVICES = "/html/bbsp/userdevinfo/getuserdevinfo.asp"
+URL_USER_DEV_PAGE = "/html/bbsp/userdevinfo/userdevinfo1.asp"
+USER_DEV_DOMAIN = (
+    "InternetGatewayDevice.X_HW_FeatureList.BBSPCustomization.UserDevInfo"
+)
+URL_USER_DEV_GET_STATE = (
+    f"/getajax.cgi?x={USER_DEV_DOMAIN}&RequestFile=nopage"
+)
+URL_USER_DEV_SET_STATE = (
+    f"/html/bbsp/userdevinfo/setajax.cgi?x={USER_DEV_DOMAIN}&RequestFile=nopage"
+)
+# the router rebuilds the device list asynchronously; it reports "Completed"
+# after ~2s, so poll a handful of times before giving up
+USER_DEV_BUILD_POLL_INTERVAL = 1.0
+USER_DEV_BUILD_POLL_COUNT = 10
 URL_OPTIC_INFO = "/html/amp/opticinfo/opticinfo.asp"
 URL_ETH_INFO = "/html/amp/ethinfo/ethinfo.asp"
 URL_WLAN_BASIC = "/html/amp/wlanbasic/WlanBasic.asp?2G"
@@ -301,6 +315,8 @@ class HuaweiOntApi:
         # rapid login retries trigger the router's anti-brute-force lockout,
         # so back off after a failed login
         self._auth_blocked_until: float = 0.0
+        # onttoken from the user-device page, reused across polls
+        self._user_dev_token: str | None = None
 
     def _ensure_session(self) -> requests.Session:
         if self._session is None:
@@ -314,6 +330,8 @@ class HuaweiOntApi:
             _LOGGER.debug("Skipping login attempt during backoff window")
             return False
         session = self._ensure_session()
+        # tokens are tied to the old session, so they never survive a login
+        self._user_dev_token = None
         try:
             r = session.post(f"{self._base_url}{URL_GET_RAND_COUNT}", timeout=10)
             token = r.text.strip().strip('﻿')
@@ -368,6 +386,80 @@ class HuaweiOntApi:
         except Exception as err:
             _LOGGER.error("Error fetching %s: %s", path, err)
             return None
+
+    def _post(self, path: str, data: str | None = None) -> str | None:
+        """POST to a path on an authenticated session, returning the body."""
+        session = self._ensure_session()
+        if not self._authenticated:
+            if not self.authenticate():
+                return None
+        try:
+            r = session.post(
+                f"{self._base_url}{path}",
+                data=data,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=25,
+            )
+            if r.status_code == 200:
+                return r.text
+            _LOGGER.warning("Failed to POST %s: status %d", path, r.status_code)
+            return None
+        except Exception as err:
+            _LOGGER.error("Error posting to %s: %s", path, err)
+            return None
+
+    def _get_user_dev_token(self) -> str | None:
+        """Fetch (and cache) the onttoken the device-list endpoints require."""
+        if self._user_dev_token:
+            return self._user_dev_token
+        html = self._fetch_page(URL_USER_DEV_PAGE)
+        if not html:
+            return None
+        m = RE_ONT_TOKEN.search(html)
+        if not m:
+            _LOGGER.warning("onttoken not found on the user-device page")
+            return None
+        self._user_dev_token = m.group(1)
+        return self._user_dev_token
+
+    def _fetch_user_devices(self) -> str | None:
+        """Fetch the connected-device list.
+
+        The router does not serve this list live. It renders it into a file
+        only when asked, so a plain read returns either "NONE" (never built)
+        or a stale snapshot from whenever it was last generated. Each poll
+        therefore asks the router to rebuild ("Creating") and waits for it to
+        report "Completed" before reading.
+        """
+        token = self._get_user_dev_token()
+        if not token:
+            return None
+
+        if self._post(
+            URL_USER_DEV_SET_STATE, f"x.State=Creating&x.X_HW_Token={token}"
+        ) is None:
+            # a rejected token usually means the session was replaced
+            self._user_dev_token = None
+            return None
+
+        for _ in range(USER_DEV_BUILD_POLL_COUNT):
+            time.sleep(USER_DEV_BUILD_POLL_INTERVAL)
+            state = self._post(
+                URL_USER_DEV_GET_STATE, f"State&x.X_HW_Token={token}"
+            )
+            if state and "Completed" in _decode_hex(state):
+                break
+        else:
+            _LOGGER.warning(
+                "Router did not finish building the device list in %.0fs",
+                USER_DEV_BUILD_POLL_COUNT * USER_DEV_BUILD_POLL_INTERVAL,
+            )
+            return None
+
+        html = self._post(URL_USER_DEVICES)
+        if html is None or html.strip().strip('"') == "NONE":
+            return None
+        return html
 
     def _parse_device_info(self, html: str, data: RouterData) -> None:
         variables = _parse_single_quoted_vars(html)
@@ -634,7 +726,7 @@ class HuaweiOntApi:
         if ont_html:
             self._parse_ont_state(ont_html, data)
 
-        devices_html = self._fetch_page(URL_USER_DEVICES)
+        devices_html = self._fetch_user_devices()
         if devices_html:
             self._parse_user_devices(devices_html, data)
 
