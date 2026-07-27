@@ -78,6 +78,10 @@ def _decode_hex(s: str) -> str:
     return RE_HEX_ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), s)
 
 
+def _is_ipv4(addr: str) -> bool:
+    return ":" not in addr and addr.count(".") == 3
+
+
 def _split_constructor_args(args_str: str) -> list[str]:
     """Split comma-separated constructor arguments, respecting quoted strings."""
     args = []
@@ -547,18 +551,37 @@ class HuaweiOntApi:
 
     def _parse_user_devices(self, html: str, data: RouterData) -> None:
         entries = _parse_constructors(html, "stUserDevInfoPTVDF")
-        devices = []
+
+        # The router emits one row per IP family, so a device holding an IPv6
+        # link-local address is listed twice under the same MAC. Collapse the
+        # rows per MAC and keep the IPv4 one, otherwise the counts run high
+        # and a device can end up reporting its fe80:: address.
+        by_mac: dict[str, list[list[str]]] = {}
         for args in entries:
             if len(args) < 7:
                 continue
-            hostname = args[_UD_HOST]
-            if hostname == "--":
-                hostname = ""
+            by_mac.setdefault(args[_UD_MAC].lower(), []).append(args)
+
+        devices = []
+        for rows in by_mac.values():
+            online = [r for r in rows if r[_UD_STATUS] == "Online"]
+            # prefer an online IPv4 row, then any IPv4 row, then whatever exists
+            args = (
+                next((r for r in online if _is_ipv4(r[_UD_IP])), None)
+                or next((r for r in rows if _is_ipv4(r[_UD_IP])), None)
+                or (online[0] if online else rows[0])
+            )
+            # a duplicate row may carry the hostname when the chosen one lacks it
+            hostname = next(
+                (r[_UD_HOST] for r in (args, *rows) if r[_UD_HOST] not in ("--", "")),
+                "",
+            )
             devices.append(ConnectedDevice(
                 hostname=hostname,
                 ip_address=args[_UD_IP],
                 mac_address=args[_UD_MAC],
-                status=args[_UD_STATUS],
+                # online on any row means the device is present
+                status="Online" if online else args[_UD_STATUS],
                 interface=args[_UD_PORT],
                 device_type=args[_UD_DEVTYPE],
                 online_duration=args[_UD_TIME],
