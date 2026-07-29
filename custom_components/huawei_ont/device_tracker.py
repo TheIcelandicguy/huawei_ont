@@ -37,8 +37,15 @@ def _valid_mac(mac: str) -> bool:
     return bool(mac) and mac != "00:00:00:00:00:00"
 
 
-def _mac_from_unique_id(unique_id: str, prefix: str) -> str:
-    return unique_id[len(prefix):] if unique_id.startswith(prefix) else ""
+def _mac_from_unique_id(unique_id: str) -> str:
+    """MAC behind a tracker's registry entry.
+
+    ScannerEntity defines unique_id as a property returning mac_address, which
+    shadows _attr_unique_id, so a tracker's unique_id is the bare lowercase MAC
+    and nothing else. Anything deriving a MAC from the registry has to agree
+    with that or it silently matches nothing.
+    """
+    return unique_id.strip().lower()
 
 
 def _is_random_mac(mac: str) -> bool:
@@ -98,11 +105,10 @@ async def async_setup_entry(
                 result[mac] = d
         return result
 
-    # one-time cleanup: drop trackers left in the registry for devices that
-    # are not currently online (clears the lease-history backlog). Trackers
-    # the user has renamed are kept — a rename pins the device.
+    # startup cleanup: drop trackers left in the registry for devices that are
+    # not currently online (clears the lease-history backlog). Trackers the
+    # user has renamed are kept — a rename pins the device.
     registry = er.async_get(hass)
-    prefix = f"{entry.entry_id}_"
     online = _online_devices()
     removed = 0
     for reg_entry in er.async_entries_for_config_entry(
@@ -112,7 +118,7 @@ async def async_setup_entry(
             continue
         if reg_entry.name:  # user-renamed → keep
             continue
-        mac = _mac_from_unique_id(reg_entry.unique_id, prefix)
+        mac = _mac_from_unique_id(reg_entry.unique_id)
         if mac not in online:
             registry.async_remove(reg_entry.entity_id)
             removed += 1
@@ -144,12 +150,12 @@ async def async_setup_entry(
         online_hostnames = [d.hostname for d in online.values() if d.hostname]
 
         for mac in new_macs:
-            if f"{prefix}{mac}" in known_ids:
+            if mac in known_ids:
                 continue  # a device we already know coming back, not a rotation
             candidates = [
                 (candidate_mac, e.original_name or "")
                 for e in reg_entries
-                for candidate_mac in (_mac_from_unique_id(e.unique_id, prefix),)
+                for candidate_mac in (_mac_from_unique_id(e.unique_id),)
                 if candidate_mac and candidate_mac not in online
             ]
             hostname = online[mac].hostname
@@ -157,15 +163,17 @@ async def async_setup_entry(
             if not old_mac:
                 continue
             old_entry = next(
-                (e for e in reg_entries if e.unique_id == f"{prefix}{old_mac}"),
+                (
+                    e
+                    for e in reg_entries
+                    if _mac_from_unique_id(e.unique_id) == old_mac
+                ),
                 None,
             )
             if old_entry is None:
                 continue
             try:
-                reg.async_update_entity(
-                    old_entry.entity_id, new_unique_id=f"{prefix}{mac}"
-                )
+                reg.async_update_entity(old_entry.entity_id, new_unique_id=mac)
             except ValueError as err:
                 _LOGGER.debug(
                     "Could not re-key %s from %s to %s: %s",
@@ -181,14 +189,14 @@ async def async_setup_entry(
             if entity is not None:
                 # the entity object is still alive (it was showing not_home),
                 # so re-point it rather than replacing it
-                entity.adopt(online[mac], f"{prefix}{mac}")
+                entity.adopt(online[mac])
                 tracked[mac] = entity
             # otherwise no entity exists yet (a pin that was offline at
             # startup, showing unavailable); the add pass below creates one
             # that binds to the re-keyed registry entry and inherits its name
             reg_entries = [e for e in reg_entries if e is not old_entry]
-            known_ids.discard(f"{prefix}{old_mac}")
-            known_ids.add(f"{prefix}{mac}")
+            known_ids.discard(old_mac)
+            known_ids.add(mac)
 
     @callback
     def _async_update_devices() -> None:
@@ -248,15 +256,19 @@ class HuaweiOntDeviceTracker(
         super().__init__(coordinator)
         self._device = device
         self._mac = device.mac_address.lower()
-        self._attr_unique_id = f"{entry.entry_id}_{self._mac}"
         self._entry_id = entry.entry_id
+        # no _attr_unique_id: ScannerEntity's unique_id property returns
+        # mac_address and would shadow it anyway, so the MAC *is* the key
 
     @callback
-    def adopt(self, device: ConnectedDevice, unique_id: str) -> None:
-        """Follow the same physical device onto a new MAC address."""
+    def adopt(self, device: ConnectedDevice) -> None:
+        """Follow the same physical device onto a new MAC address.
+
+        The caller re-keys the registry entry first; updating _mac here keeps
+        the entity's own unique_id (via mac_address) in step with it.
+        """
         self._device = device
         self._mac = device.mac_address.lower()
-        self._attr_unique_id = unique_id
         if self.hass is not None and self.entity_id:
             self.async_write_ha_state()
 
