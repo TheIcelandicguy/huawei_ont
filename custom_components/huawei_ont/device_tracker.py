@@ -37,6 +37,45 @@ def _valid_mac(mac: str) -> bool:
     return bool(mac) and mac != "00:00:00:00:00:00"
 
 
+def _mac_from_unique_id(unique_id: str, prefix: str) -> str:
+    return unique_id[len(prefix):] if unique_id.startswith(prefix) else ""
+
+
+def _is_random_mac(mac: str) -> bool:
+    """True for a locally-administered (randomised) MAC address."""
+    try:
+        return bool(int(mac.split(":")[0], 16) & 0x02)
+    except (ValueError, IndexError):
+        return False
+
+
+def _find_rotated_twin(
+    hostname: str,
+    online_hostnames: list[str],
+    candidates: list[tuple[str, str]],
+) -> str | None:
+    """Return the MAC of the stale tracker this hostname has rotated away from.
+
+    `candidates` is (mac, hostname) for existing trackers whose device is not
+    currently online. Every guard fails closed: a stranded duplicate tracker is
+    recoverable, but wrongly fusing two devices into one silently corrupts
+    whatever presence automations depend on them.
+    """
+    if not hostname:
+        # no DHCP hostname means no stable identity to match on
+        return None
+    key = hostname.casefold()
+    # a second live device under the same name makes the match ambiguous
+    if sum(1 for h in online_hostnames if h.casefold() == key) != 1:
+        return None
+    matches = [
+        mac
+        for mac, name in candidates
+        if name and name.casefold() == key and _is_random_mac(mac)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -73,11 +112,7 @@ async def async_setup_entry(
             continue
         if reg_entry.name:  # user-renamed → keep
             continue
-        mac = (
-            reg_entry.unique_id[len(prefix):]
-            if reg_entry.unique_id.startswith(prefix)
-            else ""
-        )
+        mac = _mac_from_unique_id(reg_entry.unique_id, prefix)
         if mac not in online:
             registry.async_remove(reg_entry.entity_id)
             removed += 1
@@ -85,8 +120,80 @@ async def async_setup_entry(
         _LOGGER.debug("Pruned %d stale device trackers at setup", removed)
 
     @callback
+    def _migrate_rotated_macs(
+        online: dict[str, ConnectedDevice], reg: er.EntityRegistry
+    ) -> None:
+        """Follow devices that reappeared under a fresh randomised MAC.
+
+        A phone that randomises its MAC comes back looking like a brand-new
+        device, which would strand its old tracker — renamed trackers are
+        pinned and never pruned — right next to a duplicate. Match on the DHCP
+        hostname and re-point the existing tracker instead, so its entity_id,
+        its name and any automations referencing it survive the rotation.
+        """
+        new_macs = [mac for mac in online if mac not in tracked]
+        if not new_macs:
+            return
+
+        reg_entries = [
+            e
+            for e in er.async_entries_for_config_entry(reg, entry.entry_id)
+            if e.domain == "device_tracker"
+        ]
+        known_ids = {e.unique_id for e in reg_entries}
+        online_hostnames = [d.hostname for d in online.values() if d.hostname]
+
+        for mac in new_macs:
+            if f"{prefix}{mac}" in known_ids:
+                continue  # a device we already know coming back, not a rotation
+            candidates = [
+                (candidate_mac, e.original_name or "")
+                for e in reg_entries
+                for candidate_mac in (_mac_from_unique_id(e.unique_id, prefix),)
+                if candidate_mac and candidate_mac not in online
+            ]
+            hostname = online[mac].hostname
+            old_mac = _find_rotated_twin(hostname, online_hostnames, candidates)
+            if not old_mac:
+                continue
+            old_entry = next(
+                (e for e in reg_entries if e.unique_id == f"{prefix}{old_mac}"),
+                None,
+            )
+            if old_entry is None:
+                continue
+            try:
+                reg.async_update_entity(
+                    old_entry.entity_id, new_unique_id=f"{prefix}{mac}"
+                )
+            except ValueError as err:
+                _LOGGER.debug(
+                    "Could not re-key %s from %s to %s: %s",
+                    old_entry.entity_id, old_mac, mac, err,
+                )
+                continue
+            _LOGGER.info(
+                "%s changed MAC %s -> %s, keeping tracker %s",
+                hostname, old_mac, mac, old_entry.entity_id,
+            )
+            missing.pop(old_mac, None)
+            entity = tracked.pop(old_mac, None)
+            if entity is not None:
+                # the entity object is still alive (it was showing not_home),
+                # so re-point it rather than replacing it
+                entity.adopt(online[mac], f"{prefix}{mac}")
+                tracked[mac] = entity
+            # otherwise no entity exists yet (a pin that was offline at
+            # startup, showing unavailable); the add pass below creates one
+            # that binds to the re-keyed registry entry and inherits its name
+            reg_entries = [e for e in reg_entries if e is not old_entry]
+            known_ids.discard(f"{prefix}{old_mac}")
+            known_ids.add(f"{prefix}{mac}")
+
+    @callback
     def _async_update_devices() -> None:
         online = _online_devices()
+        _migrate_rotated_macs(online, er.async_get(hass))
 
         # add trackers for newly-online devices
         new_entities = []
@@ -143,6 +250,15 @@ class HuaweiOntDeviceTracker(
         self._mac = device.mac_address.lower()
         self._attr_unique_id = f"{entry.entry_id}_{self._mac}"
         self._entry_id = entry.entry_id
+
+    @callback
+    def adopt(self, device: ConnectedDevice, unique_id: str) -> None:
+        """Follow the same physical device onto a new MAC address."""
+        self._device = device
+        self._mac = device.mac_address.lower()
+        self._attr_unique_id = unique_id
+        if self.hass is not None and self.entity_id:
+            self.async_write_ha_state()
 
     @property
     def source_type(self) -> SourceType:

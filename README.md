@@ -37,6 +37,47 @@ keep the tracker list meaningful, the integration:
   behaves as a normal presence sensor (`home` / `not_home`) instead of being
   pruned.
 
+**Renaming is how you opt a device in to presence.** An unrenamed tracker is
+transient: when its device leaves, the entity is deleted rather than switching
+to `not_home`. So if you want to use a device in an automation, rename its
+tracker first — that pins it and gives it a stable `entity_id` that survives
+the device going away.
+
+### Randomised MAC addresses
+
+Phones and tablets randomise their Wi-Fi MAC. Since trackers are keyed on MAC,
+a rotation would otherwise look like a brand-new device: a fresh tracker would
+appear while the old (pinned) one sat at `not_home` forever beside it.
+
+To avoid that, when a device appears under a new randomised MAC carrying the
+**same DHCP hostname** as a pinned tracker whose device is no longer online,
+that tracker is re-pointed at the new MAC. The `entity_id`, your rename and any
+automations referencing it all survive; nothing is deleted or duplicated.
+
+The match is deliberately conservative and does nothing unless it is certain.
+It is skipped when:
+
+- the device reports **no DHCP hostname** — there is no stable identity left to
+  match on, so such a device *will* duplicate across a rotation,
+- **more than one online device shares the hostname** (two phones both called
+  `iPhone`), or more than one stale tracker matches,
+- the old tracker's MAC is **not** randomised — a globally-unique MAC belongs to
+  hardware that does not rotate, so a name collision there is a different device.
+
+Skipping is the safe failure: a stranded duplicate is easy to delete by hand,
+whereas wrongly merging two devices would silently corrupt their presence. This
+behaviour is always on and has no setting.
+
+### What the client-count sensors mean
+
+`Wi-Fi clients` counts only devices associated with the **ONT's own radios**. If
+you run another access point in bridge/AP mode, its wireless clients reach the
+ONT over a LAN port and are counted in `LAN clients` instead. `Connected
+devices` is the total and equals the sum of the two.
+
+Devices behind a second router doing **NAT** are not visible at all — the ONT
+only ever sees that router's own address.
+
 ### Vendor labelling
 
 Devices that don't announce a DHCP hostname are labelled by manufacturer using
