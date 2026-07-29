@@ -78,6 +78,21 @@ devices` is the total and equals the sum of the two.
 Devices behind a second router doing **NAT** are not visible at all — the ONT
 only ever sees that router's own address.
 
+### Names and non-ASCII characters
+
+SSIDs are read as UTF-8, so a network called `Ásgarður` or `Þórsheimili` shows
+up correctly in the Wi-Fi switch names.
+
+**Device names are a different matter, and the limit is not in this
+integration.** A tracker's default name is the DHCP hostname the device
+announces, and DHCP hostnames are restricted to ASCII letters, digits and
+hyphens ([RFC 1123](https://www.rfc-editor.org/rfc/rfc1123)). Phones therefore
+transliterate before sending: a phone named `Anna-sími` announces itself as
+`Anna-simi`, and `Davíð Thor's S25 Ultra` arrives as `David-THor-s-S25-Ultra`.
+The accented form never reaches the router, so it cannot be recovered here —
+rename the tracker in Home Assistant if you want the correct spelling (which
+also pins it, see above).
+
 ### Vendor labelling
 
 Devices that don't announce a DHCP hostname are labelled by manufacturer using

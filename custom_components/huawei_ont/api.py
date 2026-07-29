@@ -75,7 +75,22 @@ RE_HEX_ESCAPE = re.compile(r'\\x([0-9a-fA-F]{2})')
 
 
 def _decode_hex(s: str) -> str:
-    return RE_HEX_ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), s)
+    r"""Expand the router's \xNN escapes.
+
+    The escapes carry raw UTF-8 *bytes*, not code points, so decoding them one
+    at a time leaves anything above ASCII as mojibake — an SSID of "Ásgarður"
+    arrives as six escapes and would come out "ÃsgarÃ°ur". Round the result
+    back through latin-1 to recover the original bytes and decode them as the
+    UTF-8 they are. ASCII is unaffected, and text that is already proper
+    Unicode (or is malformed) is returned untouched rather than mangled.
+    """
+    out = RE_HEX_ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), s)
+    if out.isascii():
+        return out
+    try:
+        return out.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return out
 
 
 def _is_ipv4(addr: str) -> bool:
