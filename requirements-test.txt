@@ -1,0 +1,6 @@
+# pytest-homeassistant-custom-component pins the Home Assistant version the
+# suite is checked against, and pulls in pytest and pytest-asyncio with it.
+# Home Assistant does not import on Windows, so the platform tests only run on
+# Linux/macOS — tests/test_api.py needs nothing but pytest and requests.
+pytest-homeassistant-custom-component==0.13.316
+requests>=2.31

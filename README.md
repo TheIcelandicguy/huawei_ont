@@ -140,6 +140,23 @@ enter:
   still available.
 - **Login back-off.** After a failed login the integration waits ~60 s before
   retrying, to avoid tripping the router's brute-force lockout.
+- **A failed poll is not an empty router.** If a poll brings back nothing, the
+  entities go unavailable rather than reporting zero devices, and no tracker is
+  pruned. Device trackers are only added or removed on a poll where the router
+  actually handed over a device list.
+
+## Development
+
+```bash
+pip install -r requirements-test.txt
+pytest
+```
+
+Home Assistant does not import on Windows (`homeassistant.runner` needs
+`fcntl`), so the platform tests only run on Linux, macOS or WSL — pytest prints
+a header saying so and collects `tests/test_api.py` alone. That file needs
+nothing but `pytest` and `requests`, which is why `api.py` imports no Home
+Assistant code. CI runs the full suite on Linux and the API suite on Windows.
 
 ## Credits
 
