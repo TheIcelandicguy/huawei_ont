@@ -34,10 +34,16 @@ URL_USER_DEV_GET_STATE = (
 URL_USER_DEV_SET_STATE = (
     f"/html/bbsp/userdevinfo/setajax.cgi?x={USER_DEV_DOMAIN}&RequestFile=nopage"
 )
-# the router rebuilds the device list asynchronously; it reports "Completed"
-# after ~2s, so poll a handful of times before giving up
-USER_DEV_BUILD_POLL_INTERVAL = 1.0
-USER_DEV_BUILD_POLL_COUNT = 10
+# The router rebuilds the device list asynchronously and reports "Completed"
+# after ~2s. Poll often enough to catch the state *leaving* "Completed", since
+# that transition is the only proof the rebuild we asked for actually started,
+# and bound the whole wait by wall clock so a hung router cannot stall a poll
+# for longer than the scan interval.
+USER_DEV_BUILD_POLL_INTERVAL = 0.25
+USER_DEV_BUILD_TIMEOUT = 12.0
+# how long to insist on that transition before accepting a "Completed" that was
+# already there — a router that rebuilds faster than we poll must not hang here
+USER_DEV_BUILD_CONFIRM_TIMEOUT = 2.0
 URL_OPTIC_INFO = "/html/amp/opticinfo/opticinfo.asp"
 URL_ETH_INFO = "/html/amp/ethinfo/ethinfo.asp"
 URL_WLAN_BASIC = "/html/amp/wlanbasic/WlanBasic.asp?2G"
@@ -72,6 +78,19 @@ COUNTER_WRAP = 2**32
 
 RE_SINGLE_QUOTED_VAR = re.compile(r"var\s+(\w+)\s*=\s*'([^']*)'\s*;")
 RE_HEX_ESCAPE = re.compile(r'\\x([0-9a-fA-F]{2})')
+
+# per-request timeouts: the device-list body is large and slow to render, the
+# little state polls are not and must not hold a poll open
+POST_TIMEOUT = 25
+STATE_POST_TIMEOUT = 10
+
+
+class HuaweiOntError(Exception):
+    """Base error for this integration."""
+
+
+class HuaweiOntConnectionError(HuaweiOntError):
+    """The router returned nothing at all — unreachable, or the login failed."""
 
 
 def _decode_hex(s: str) -> str:
@@ -253,9 +272,11 @@ class RouterData:
     bytes_received: int = 0
     packets_sent: int = 0
     packets_received: int = 0
-    connected_device_count: int = 0
-    wifi_client_count: int = 0
-    lan_client_count: int = 0
+    # None until a device list is actually parsed: a failed fetch must show up
+    # as "unknown" on the sensors, not as a router with nobody connected
+    connected_device_count: int | None = None
+    wifi_client_count: int | None = None
+    lan_client_count: int | None = None
     download_rate_mbps: float | None = None
     upload_rate_mbps: float | None = None
     optical_temperature: float | None = None
@@ -267,6 +288,10 @@ class RouterData:
     software_version: str = ""
     hardware_version: str = ""
     mac_address: str = ""
+    # whether `devices` came from the router this poll. An empty list means
+    # "nobody is connected" only when this is True; otherwise it means the
+    # fetch failed and consumers must leave their existing state alone.
+    device_list_valid: bool = False
     devices: list[ConnectedDevice] = field(default_factory=list)
     lan_ports: list[LanPort] = field(default_factory=list)
     wifi_networks: list[WifiNetwork] = field(default_factory=list)
@@ -336,6 +361,9 @@ class HuaweiOntApi:
         self._auth_blocked_until: float = 0.0
         # onttoken from the user-device page, reused across polls
         self._user_dev_token: str | None = None
+        # bumped on every successful login, so a caller mid-way through a
+        # token-bearing sequence can tell that the session moved under it
+        self._auth_generation = 0
 
     def _ensure_session(self) -> requests.Session:
         if self._session is None:
@@ -370,6 +398,7 @@ class HuaweiOntApi:
 
             if r.status_code == 200 and "CookieHttps" in session.cookies:
                 self._authenticated = True
+                self._auth_generation += 1
                 _LOGGER.debug("Authentication successful")
                 return True
 
@@ -406,21 +435,43 @@ class HuaweiOntApi:
             _LOGGER.error("Error fetching %s: %s", path, err)
             return None
 
-    def _post(self, path: str, data: str | None = None) -> str | None:
-        """POST to a path on an authenticated session, returning the body."""
+    def _post(
+        self,
+        path: str,
+        data: str | None = None,
+        timeout: int = POST_TIMEOUT,
+    ) -> str | None:
+        """POST to a path on an authenticated session, returning the body.
+
+        Handles an evicted session the same way _fetch_page does. The router
+        answers a request on a dead session with a redirect to the login page,
+        so redirects must stay unfollowed — following one turns session loss
+        into a perfectly ordinary 200 carrying the login form, and the client
+        would sit there logged out until Home Assistant restarts.
+        """
         session = self._ensure_session()
         if not self._authenticated:
             if not self.authenticate():
                 return None
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        url = f"{self._base_url}{path}"
         try:
             r = session.post(
-                f"{self._base_url}{path}",
-                data=data,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=25,
+                url, data=data, headers=headers, timeout=timeout,
+                allow_redirects=False,
             )
             if r.status_code == 200:
                 return r.text
+            if r.status_code in (403, 302):
+                _LOGGER.debug("Session expired, re-authenticating")
+                self._authenticated = False
+                if self.authenticate():
+                    r = session.post(
+                        url, data=data, headers=headers, timeout=timeout,
+                        allow_redirects=False,
+                    )
+                    if r.status_code == 200:
+                        return r.text
             _LOGGER.warning("Failed to POST %s: status %d", path, r.status_code)
             return None
         except Exception as err:
@@ -441,37 +492,77 @@ class HuaweiOntApi:
         self._user_dev_token = m.group(1)
         return self._user_dev_token
 
+    def _read_build_state(self, token: str) -> str | None:
+        state = self._post(
+            URL_USER_DEV_GET_STATE,
+            f"State&x.X_HW_Token={token}",
+            timeout=STATE_POST_TIMEOUT,
+        )
+        return _decode_hex(state) if state is not None else None
+
     def _fetch_user_devices(self) -> str | None:
         """Fetch the connected-device list.
 
+        The onttoken these endpoints take belongs to the login session, so a
+        re-login part-way through the sequence invalidates the one in flight.
+        Notice that and run the whole thing once more on the fresh session
+        rather than losing a poll's worth of devices.
+        """
+        generation = self._auth_generation
+        html = self._fetch_user_devices_once()
+        if html is None and self._auth_generation != generation:
+            _LOGGER.debug("Session was replaced mid-fetch, retrying device list")
+            html = self._fetch_user_devices_once()
+        return html
+
+    def _fetch_user_devices_once(self) -> str | None:
+        """Ask the router to rebuild the device list, then read it.
+
         The router does not serve this list live. It renders it into a file
         only when asked, so a plain read returns either "NONE" (never built)
-        or a stale snapshot from whenever it was last generated. Each poll
-        therefore asks the router to rebuild ("Creating") and waits for it to
-        report "Completed" before reading.
+        or a stale snapshot from whenever it was last generated.
         """
         token = self._get_user_dev_token()
         if not token:
             return None
 
+        # The state is left at "Completed" by the previous poll, so seeing it
+        # again proves nothing about the rebuild we are about to request. Note
+        # that up front and hold out for the state to change.
+        before = self._read_build_state(token)
+        stale = before is not None and "Completed" in before
+
         if self._post(
-            URL_USER_DEV_SET_STATE, f"x.State=Creating&x.X_HW_Token={token}"
+            URL_USER_DEV_SET_STATE,
+            f"x.State=Creating&x.X_HW_Token={token}",
+            timeout=STATE_POST_TIMEOUT,
         ) is None:
             # a rejected token usually means the session was replaced
             self._user_dev_token = None
             return None
 
-        for _ in range(USER_DEV_BUILD_POLL_COUNT):
+        started = time.monotonic()
+        deadline = started + USER_DEV_BUILD_TIMEOUT
+        while time.monotonic() < deadline:
             time.sleep(USER_DEV_BUILD_POLL_INTERVAL)
-            state = self._post(
-                URL_USER_DEV_GET_STATE, f"State&x.X_HW_Token={token}"
-            )
-            if state and "Completed" in _decode_hex(state):
+            state = self._read_build_state(token)
+            if state is None:
+                continue
+            if "Completed" not in state:
+                stale = False  # the rebuild we asked for is under way
+                continue
+            if not stale:
+                break
+            if time.monotonic() - started > USER_DEV_BUILD_CONFIRM_TIMEOUT:
+                _LOGGER.debug(
+                    "Router never left 'Completed'; the device list may be "
+                    "the snapshot from the previous rebuild"
+                )
                 break
         else:
             _LOGGER.warning(
                 "Router did not finish building the device list in %.0fs",
-                USER_DEV_BUILD_POLL_COUNT * USER_DEV_BUILD_POLL_INTERVAL,
+                USER_DEV_BUILD_TIMEOUT,
             )
             return None
 
@@ -580,12 +671,12 @@ class HuaweiOntApi:
         devices = []
         for rows in by_mac.values():
             online = [r for r in rows if r[_UD_STATUS] == "Online"]
-            # prefer an online IPv4 row, then any IPv4 row, then whatever exists
-            args = (
-                next((r for r in online if _is_ipv4(r[_UD_IP])), None)
-                or next((r for r in rows if _is_ipv4(r[_UD_IP])), None)
-                or (online[0] if online else rows[0])
-            )
+            # Online on any row means the device is present, so the row we
+            # report has to be an online one — an offline leftover carries the
+            # IP, interface and rates from whenever the device was last seen,
+            # and pairing those with an "Online" status is simply a lie.
+            pool = online or rows
+            args = next((r for r in pool if _is_ipv4(r[_UD_IP])), pool[0])
             # a duplicate row may carry the hostname when the chosen one lacks it
             hostname = next(
                 (r[_UD_HOST] for r in (args, *rows) if r[_UD_HOST] not in ("--", "")),
@@ -595,7 +686,6 @@ class HuaweiOntApi:
                 hostname=hostname,
                 ip_address=args[_UD_IP],
                 mac_address=args[_UD_MAC],
-                # online on any row means the device is present
                 status="Online" if online else args[_UD_STATUS],
                 interface=args[_UD_PORT],
                 device_type=args[_UD_DEVTYPE],
@@ -605,6 +695,7 @@ class HuaweiOntApi:
             ))
 
         data.devices = devices
+        data.device_list_valid = True
         data.connected_device_count = sum(
             1 for d in devices if d.status == "Online"
         )
@@ -745,42 +836,70 @@ class HuaweiOntApi:
         self._last_counters = (now, data.bytes_sent, data.bytes_received)
 
     def get_router_data(self) -> RouterData:
+        """Poll every page the entities read.
+
+        One page failing is survivable — the router drops one now and then and
+        the affected values simply stay at their defaults. A poll where
+        *nothing* came back is a different animal: an empty RouterData reads as
+        a perfectly healthy router with no traffic and nobody connected, which
+        zeroes the sensors and sends every tracker away. Raise instead, so the
+        coordinator marks the integration unavailable and the last known state
+        stands.
+        """
         data = RouterData()
+        fetched = 0
 
         device_html = self._fetch_page(URL_DEVICE_INFO)
         if device_html:
+            fetched += 1
             self._parse_device_info(device_html, data)
 
         wan_domain = ""
         wan_cache_html = self._fetch_page(URL_WAN_CACHE)
         if wan_cache_html:
+            fetched += 1
             wan_domain = self._parse_wan_cache(wan_cache_html, data)
 
         wan_stats_html = self._fetch_page(URL_WAN_STATS)
         if wan_stats_html:
+            fetched += 1
             self._parse_wan_stats(wan_stats_html, data, wan_domain)
 
         ont_html = self._fetch_page(URL_ONT_STATE)
         if ont_html:
+            fetched += 1
             self._parse_ont_state(ont_html, data)
 
         devices_html = self._fetch_user_devices()
         if devices_html:
+            fetched += 1
             self._parse_user_devices(devices_html, data)
 
         optic_html = self._fetch_page(URL_OPTIC_INFO)
         if optic_html:
+            fetched += 1
             self._parse_optic_info(optic_html, data)
 
         eth_html = self._fetch_page(URL_ETH_INFO)
         if eth_html:
+            fetched += 1
             self._parse_eth_info(eth_html, data)
 
         wlan_html = self._fetch_page(URL_WLAN_BASIC)
         if wlan_html:
+            fetched += 1
             self._parse_wlan_info(wlan_html, data)
 
-        self._compute_rates(data)
+        if not fetched:
+            raise HuaweiOntConnectionError(
+                f"No data returned by the router at {self._host}"
+            )
+
+        # Only feed the rate calculation counters that actually came from the
+        # router: storing the default zeroes would make the next real reading
+        # look like a 4 GB spike and cost two polls' worth of rates.
+        if wan_stats_html:
+            self._compute_rates(data)
 
         return data
 

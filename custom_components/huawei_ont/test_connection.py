@@ -1,7 +1,7 @@
 """Standalone test — run: python test_connection.py <password> [host] [username]"""
 
 import sys
-from api import HuaweiOntApi
+from api import HuaweiOntApi, HuaweiOntConnectionError
 
 
 def main():
@@ -23,7 +23,12 @@ def main():
         return
 
     print("\nFetching router data...")
-    data = api.get_router_data()
+    try:
+        data = api.get_router_data()
+    except HuaweiOntConnectionError as err:
+        print(f"Failed: {err}")
+        api.close()
+        sys.exit(1)
 
     print(f"\n--- Device Info ---")
     print(f"  Model:    {data.model}")
