@@ -3,14 +3,19 @@
 Only-online mode: a tracker exists only while its device is currently
 connected. The router returns its full DHCP lease history (hundreds of
 devices), so we filter to online devices and prune trackers once a device
-has been gone for a short grace period. A one-time registry cleanup at
-setup removes stale trackers left over from earlier "track everything"
-behaviour.
+has been gone for PRUNE_AFTER. A registry cleanup at setup removes
+stale trackers left over from earlier "track everything" behaviour.
+
+Every removal here is driven by a device's absence from the router's list, so
+nothing in this module may act on a list the router did not actually return —
+see `device_list_valid`.
 """
 
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
+from datetime import datetime, timedelta
 
 from homeassistant.components.device_tracker import ScannerEntity, SourceType
 from homeassistant.config_entries import ConfigEntry
@@ -19,6 +24,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .api import ConnectedDevice
 from .const import DOMAIN
@@ -28,9 +34,14 @@ from .oui import short_label, vendor
 
 _LOGGER = logging.getLogger(__name__)
 
-# how many consecutive polls a device may be absent before its tracker is
-# removed — a short grace window absorbs brief Wi-Fi drops without churn
-PRUNE_GRACE = 3
+# How long a device may be absent before its tracker is removed. Measured on
+# the development install over 30 days: with the old three-poll (90 s) grace,
+# 75 trackers were removed and re-created 21,956 times — Wi-Fi clients and
+# Shelly wall displays dropping off the list for a minute or two. 97.8% were
+# back within 5 minutes and 98.9% within 10; past that the curve is flat
+# (99.1% at an hour), so the rest had genuinely left. A time rather than a
+# poll count, so it does not shrink with a shorter scan interval.
+PRUNE_AFTER = timedelta(minutes=10)
 
 
 def _valid_mac(mac: str) -> bool:
@@ -57,16 +68,22 @@ def _is_random_mac(mac: str) -> bool:
 
 
 def _find_rotated_twin(
+    new_mac: str,
     hostname: str,
     online_hostnames: list[str],
+    known_hostnames: dict[str, str],
     candidates: list[tuple[str, str]],
 ) -> str | None:
     """Return the MAC of the stale tracker this hostname has rotated away from.
 
-    `candidates` is (mac, hostname) for existing trackers whose device is not
-    currently online. Every guard fails closed: a stranded duplicate tracker is
-    recoverable, but wrongly fusing two devices into one silently corrupts
-    whatever presence automations depend on them.
+    `online_hostnames` is every hostname currently online, `known_hostnames`
+    maps MAC to hostname across everything the router remembers (its lease
+    history included), and `candidates` is (mac, hostname) for existing
+    trackers whose device is not currently online.
+
+    Every guard fails closed: a stranded duplicate tracker is recoverable, but
+    wrongly fusing two devices into one silently corrupts whatever presence
+    automations depend on them.
     """
     if not hostname:
         # no DHCP hostname means no stable identity to match on
@@ -80,7 +97,19 @@ def _find_rotated_twin(
         for mac, name in candidates
         if name and name.casefold() == key and _is_random_mac(mac)
     ]
-    return matches[0] if len(matches) == 1 else None
+    if len(matches) != 1:
+        return None
+    old_mac = matches[0]
+    # Generic DHCP names ("iPhone", "localhost") are not identities. The two
+    # MACs of a real rotation legitimately share one, but a third device
+    # anywhere in the router's lease history answering to the same name means
+    # the name singles out nobody — refuse rather than fuse two devices.
+    if any(
+        mac not in (new_mac, old_mac) and name and name.casefold() == key
+        for mac, name in known_hostnames.items()
+    ):
+        return None
+    return old_mac
 
 
 async def async_setup_entry(
@@ -90,7 +119,8 @@ async def async_setup_entry(
 ) -> None:
     coordinator: HuaweiOntCoordinator = hass.data[DOMAIN][entry.entry_id]
     tracked: dict[str, HuaweiOntDeviceTracker] = {}
-    missing: dict[str, int] = {}
+    # when each tracked device was first missing from the router's list
+    missing: dict[str, datetime] = {}
 
     # warm the OUI table off the event loop so the first vendor lookup
     # (in an entity property getter) doesn't block
@@ -105,25 +135,30 @@ async def async_setup_entry(
                 result[mac] = d
         return result
 
-    # startup cleanup: drop trackers left in the registry for devices that are
+    # Startup cleanup: drop trackers left in the registry for devices that are
     # not currently online (clears the lease-history backlog). Trackers the
     # user has renamed are kept — a rename pins the device.
-    registry = er.async_get(hass)
-    online = _online_devices()
-    removed = 0
-    for reg_entry in er.async_entries_for_config_entry(
-        registry, entry.entry_id
-    ):
-        if reg_entry.domain != "device_tracker":
-            continue
-        if reg_entry.name:  # user-renamed → keep
-            continue
-        mac = _mac_from_unique_id(reg_entry.unique_id)
-        if mac not in online:
-            registry.async_remove(reg_entry.entity_id)
-            removed += 1
-    if removed:
-        _LOGGER.debug("Pruned %d stale device trackers at setup", removed)
+    #
+    # This runs on every restart and reload, so it must never fire on a list
+    # the router did not return: an unreachable router at Home Assistant start
+    # would otherwise wipe every unpinned tracker in one go.
+    if coordinator.data.device_list_valid:
+        registry = er.async_get(hass)
+        online = _online_devices()
+        removed = 0
+        for reg_entry in er.async_entries_for_config_entry(
+            registry, entry.entry_id
+        ):
+            if reg_entry.domain != "device_tracker":
+                continue
+            if reg_entry.name:  # user-renamed → keep
+                continue
+            mac = _mac_from_unique_id(reg_entry.unique_id)
+            if mac not in online:
+                registry.async_remove(reg_entry.entity_id)
+                removed += 1
+        if removed:
+            _LOGGER.debug("Pruned %d stale device trackers at setup", removed)
 
     @callback
     def _migrate_rotated_macs(
@@ -148,6 +183,12 @@ async def async_setup_entry(
         ]
         known_ids = {e.unique_id for e in reg_entries}
         online_hostnames = [d.hostname for d in online.values() if d.hostname]
+        # every MAC the router remembers, lease history included — a name that
+        # is not unique across all of it cannot identify a rotated device
+        known_hostnames = {
+            d.mac_address.lower(): d.hostname
+            for d in coordinator.data.devices
+        }
 
         for mac in new_macs:
             if mac in known_ids:
@@ -159,7 +200,9 @@ async def async_setup_entry(
                 if candidate_mac and candidate_mac not in online
             ]
             hostname = online[mac].hostname
-            old_mac = _find_rotated_twin(hostname, online_hostnames, candidates)
+            old_mac = _find_rotated_twin(
+                mac, hostname, online_hostnames, known_hostnames, candidates
+            )
             if not old_mac:
                 continue
             old_entry = next(
@@ -200,6 +243,11 @@ async def async_setup_entry(
 
     @callback
     def _async_update_devices() -> None:
+        if not coordinator.data.device_list_valid:
+            # The router answered, but not with a device list. Reading that as
+            # "everybody left" would age every tracker out of the grace window
+            # and delete the lot once PRUNE_AFTER ran out.
+            return
         online = _online_devices()
         _migrate_rotated_macs(online, er.async_get(hass))
 
@@ -214,8 +262,9 @@ async def async_setup_entry(
         if new_entities:
             async_add_entities(new_entities)
 
-        # prune trackers whose device has been offline beyond the grace
-        # window — but keep user-renamed ones (they show not_home instead)
+        # prune trackers whose device has been gone for PRUNE_AFTER — but
+        # keep user-renamed ones (they show not_home instead)
+        now = dt_util.utcnow()
         reg = er.async_get(hass)
         for mac in list(tracked):
             if mac in online:
@@ -227,8 +276,7 @@ async def async_setup_entry(
             if reg_entry and reg_entry.name:  # user-renamed → keep, show away
                 missing.pop(mac, None)
                 continue
-            missing[mac] = missing.get(mac, 0) + 1
-            if missing[mac] >= PRUNE_GRACE:
+            if now - missing.setdefault(mac, now) >= PRUNE_AFTER:
                 tracked.pop(mac)
                 missing.pop(mac, None)
                 if reg_entry:
@@ -303,10 +351,12 @@ class HuaweiOntDeviceTracker(
 
     @property
     def extra_state_attributes(self) -> dict[str, str]:
+        # No online_duration: it moves on every poll, which made every poll a
+        # new state and a new recorder row per tracker — 2.2M rows a month
+        # from 72 trackers on the development install.
         attrs = {
             "interface": self._device.interface,
             "device_type": self._device.device_type,
-            "online_duration": self._device.online_duration,
         }
         v = vendor(self._mac)
         if v:
@@ -324,8 +374,18 @@ class HuaweiOntDeviceTracker(
 
     @callback
     def _handle_coordinator_update(self) -> None:
+        if not self.coordinator.data.device_list_valid:
+            # no list this poll: keep reporting what we last knew
+            super()._handle_coordinator_update()
+            return
         for device in self.coordinator.data.devices:
             if device.mac_address.lower() == self._mac:
                 self._device = device
                 break
+        else:
+            # The router dropped this MAC from its list entirely. Pinned
+            # trackers are never pruned, so without this they would sit on
+            # their last-seen data and report home indefinitely.
+            if self._device.status == "Online":
+                self._device = replace(self._device, status="Offline")
         super()._handle_coordinator_update()
