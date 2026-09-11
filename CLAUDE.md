@@ -181,15 +181,21 @@ style by hand (4 spaces, ~79 cols). `.gitattributes` forces LF.
 Source on `E:`, the HA config root is mapped to `Z:`:
 
 ```powershell
-robocopy "E:\huawei_ont\custom_components\huawei_ont" "Z:\custom_components\huawei_ont" /MIR /XD __pycache__ /NFL /NDL /NJH /NP
-if ($LASTEXITCODE -lt 8) { "robocopy OK (exit $LASTEXITCODE)" } else { "robocopy FAILED (exit $LASTEXITCODE)" }
+.\deploy.ps1            # custom_components\huawei_ont -> Z:\custom_components\huawei_ont
+.\deploy.ps1 -DryRun    # show what would change, write nothing
 ```
 
+`deploy.ps1` is a thin wrapper over `E:\tools\deploy-to-ha.ps1`: `robocopy /E
+/R:2 /W:2` (`/E`, never `/MIR`) excluding `__pycache__`, `.git`, `.claude`,
+`.venv`, `tests`, `*.pyc`/`*.pyo`, `settings.local.json` and `test_*.py` — the
+last one is what keeps `test_connection.py` off the live config. It refuses to
+run unless `Z:\configuration.yaml` exists, warns about files on `Z:` newer than
+`E:`, lists files on `Z:` the repo no longer has (`/E` never deletes; remove a
+stale module by hand), and checks the deployed manifest version.
+
 Robocopy exit codes below 8 are success — **do not read exit 1 or 3 as failure**.
-Then restart Home Assistant. `/MIR` deletes anything on the target not in the
-source, hence `/XD __pycache__`. If HA has modules or `.pyc`s open the copy fails
-with permission/EPERM errors — expected Windows file-lock friction, not a broken
-command; retry, or restart HA first.
+Then restart Home Assistant. `/R:2 /W:2` turns a file HA holds open into an
+error instead of a hang; if the copy fails on a lock, restart HA and re-run.
 
 ## Gotchas
 
