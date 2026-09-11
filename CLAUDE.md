@@ -1,7 +1,7 @@
 # CLAUDE.md — huawei_ont
 
 Home Assistant custom integration for **Huawei OptiXstar** ONTs. Domain
-`huawei_ont`, **v1.0.3** (`custom_components/huawei_ont/manifest.json`),
+`huawei_ont`, **v1.0.4** (`custom_components/huawei_ont/manifest.json`),
 `integration_type: hub`, `iot_class: local_polling`, `requirements: []` — no
 third-party deps; `api.py` uses only `requests`, which HA already ships. Repo
 `TheIcelandicguy/huawei_ont`, branch `main`; HACS custom repo, min HA `2024.1.0`.
@@ -24,7 +24,7 @@ custom_components/huawei_ont/
   const.py        DOMAIN, CONF_*, DEFAULT_HOST 192.168.0.1, admin, 30
   sensor.py binary_sensor.py switch.py button.py device_tracker.py
   oui.py + oui_db.csv   offline IEEE OUI -> vendor; strings.json; translations/
-tests/  conftest.py, test_api.py (38), test_device_tracker.py (18)
+tests/  conftest.py, test_api.py (39), test_device_tracker.py (20)
 ```
 
 ## How it talks to the ONT (the non-obvious part)
@@ -129,8 +129,16 @@ all on one device (`identifiers={(DOMAIN, entry.entry_id)}`). **No services.**
 Trackers are keyed on **MAC** — `ScannerEntity.unique_id` is a property returning
 `mac_address`, so `_attr_unique_id` is shadowed and useless here. The ONT returns
 its whole DHCP lease history, so a tracker exists only while the device is online
-and is dropped after `PRUNE_GRACE = 3` absent polls. **A user-renamed tracker is
+and is dropped once absent for `PRUNE_AFTER` (10 min, wall-clock, not polls);
+inside that window it shows `not_home`. Measured, not guessed: the old 3-poll
+(90 s) grace deleted and re-created 75 trackers 21,956 times in 30 days, and
+98.9% of those devices were back within 10 min. **A user-renamed tracker is
 pinned** (never pruned; shows `not_home`) — renaming is the presence opt-in.
+
+`online_duration` is parsed into `ConnectedDevice` but is deliberately **not** a
+tracker attribute: it moves every poll, so it made every poll a new state and a
+recorder row per tracker (2.2M rows/month from 72 trackers). Keep attributes to
+values that change only when something actually happens.
 
 `_migrate_rotated_macs` follows a device returning on a fresh randomised MAC
 (locally-administered bit, `int(mac[0:2],16) & 0x02`) by matching DHCP hostname
@@ -152,7 +160,13 @@ pytest -q tests/test_api.py  # the only part that runs on Windows
 Local venv: `E:\huawei_ont\.venv\Scripts\pytest.exe` (Python 3.14). HA does not
 import on Windows (`homeassistant.runner` needs `fcntl`), so `conftest.py` sets
 `collect_ignore = ["test_device_tracker.py"]` and prints a `pytest_report_header`
-saying so. `api.py` is kept HA-free precisely so `test_api.py` runs anywhere, and
+saying so. That venv also has HA installed, though, so pytest auto-loads the
+`pytest_homeassistant_custom_component` plugin and dies on `fcntl` before
+`conftest.py` runs — CI's Windows job never has it installed. Locally:
+`cmd /c "set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1&& .venv\Scripts\pytest.exe -q tests\test_api.py"`
+(via `cmd`, because PowerShell mangles `$env:` through the MCP layer). The full
+suite runs in WSL Ubuntu from `/mnt/e/huawei_ont` with
+`~/ha-test-venv/bin/python -m pytest -q` (phcc 0.13.316, HA 2026.2.3, py3.12). `api.py` is kept HA-free precisely so `test_api.py` runs anywhere, and
 `conftest.load_standalone()` imports `api`/`oui` straight off disk to bypass the
 package `__init__` — **do not add HA imports to `api.py` or `oui.py`**.
 
@@ -180,7 +194,7 @@ command; retry, or restart HA first.
 ## Gotchas
 
 - **The deployed copy drifts.** `Z:\custom_components\huawei_ont\manifest.json`
-  is at **1.0.2** while the repo is at **1.0.3** — check that before debugging
+  is at **1.0.2** while the repo is at **1.0.4** — check that before debugging
   live behaviour, and bump `version` in the same commit as the change.
 - **One admin session.** A browser login to the ONT web UI fights the
   integration for it; each side steals it back. Disable the integration first.

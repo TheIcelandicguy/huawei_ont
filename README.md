@@ -31,15 +31,16 @@ The router hands back its entire DHCP lease history (hundreds of devices). To
 keep the tracker list meaningful, the integration:
 
 - creates a tracker **only for currently-connected devices**,
-- **prunes** a tracker once its device has been offline for a short grace
-  period (so the list reflects what's actually on the network),
+- **prunes** a tracker once its device has been gone for ten minutes (so the
+  list reflects what's actually on the network, without deleting and
+  re-creating a tracker every time a device drops off Wi-Fi for a minute),
 - **keeps any tracker you rename** — a rename pins the device, which then
   behaves as a normal presence sensor (`home` / `not_home`) instead of being
   pruned.
 
 **Renaming is how you opt a device in to presence.** An unrenamed tracker is
-transient: when its device leaves, the entity is deleted rather than switching
-to `not_home`. So if you want to use a device in an automation, rename its
+transient: when its device leaves it shows `not_home` for ten minutes and is
+then deleted. So if you want to use a device in an automation, rename its
 tracker first — that pins it and gives it a stable `entity_id` that survives
 the device going away.
 

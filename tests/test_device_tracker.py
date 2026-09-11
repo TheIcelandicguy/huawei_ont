@@ -8,9 +8,11 @@ must not be mistaken for a router with nobody connected.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_HOME, STATE_NOT_HOME, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
@@ -29,7 +31,7 @@ from custom_components.huawei_ont.const import (
     DOMAIN,
 )
 from custom_components.huawei_ont.device_tracker import (
-    PRUNE_GRACE,
+    PRUNE_AFTER,
     _find_rotated_twin,
     _is_random_mac,
     _mac_from_unique_id,
@@ -54,6 +56,7 @@ def device(
     status: str = "Online",
     ip: str = "192.168.0.5",
     interface: str = "SSID1",
+    online_duration: str = "600",
 ) -> ConnectedDevice:
     return ConnectedDevice(
         hostname=hostname,
@@ -62,7 +65,7 @@ def device(
         status=status,
         interface=interface,
         device_type="Phone",
-        online_duration="600",
+        online_duration=online_duration,
     )
 
 
@@ -128,6 +131,15 @@ async def poll(hass: HomeAssistant, entry: MockConfigEntry) -> None:
     """Run one coordinator update with whatever the fake API now returns."""
     await hass.data[DOMAIN][entry.entry_id].async_refresh()
     await hass.async_block_till_done()
+
+
+async def poll_beyond_grace(
+    hass: HomeAssistant, entry: MockConfigEntry, freezer: FrozenDateTimeFactory
+) -> None:
+    """Two polls PRUNE_AFTER apart: long enough to prune anything absent."""
+    await poll(hass, entry)
+    freezer.tick(PRUNE_AFTER)
+    await poll(hass, entry)
 
 
 def tracker_entities(registry: er.EntityRegistry, entry_id: str) -> dict[str, str]:
@@ -229,20 +241,73 @@ async def test_online_devices_get_trackers(
     assert hass.states.get(trackers[PHONE_MAC]).state == STATE_HOME
 
 
-async def test_a_device_that_leaves_is_pruned_after_the_grace_window(
+async def test_a_poll_that_only_moves_online_time_writes_no_state(
     hass: HomeAssistant, fake_api, entity_registry: er.EntityRegistry
+):
+    # online_duration moves on every poll; as an attribute it made each poll
+    # a new state, and a new recorder row, for every tracker
+    fake_api.data = router_data(device(PHONE_MAC, "Davids-iPhone"))
+    entry = make_entry(hass)
+    assert await setup_entry(hass, entry)
+    entity_id = tracker_entities(entity_registry, entry.entry_id)[PHONE_MAC]
+    before = hass.states.get(entity_id)
+    assert "online_duration" not in before.attributes
+
+    fake_api.data = router_data(
+        device(PHONE_MAC, "Davids-iPhone", online_duration="630")
+    )
+    await poll(hass, entry)
+    assert hass.states.get(entity_id).last_updated == before.last_updated
+
+
+async def test_a_device_that_leaves_is_pruned_after_the_grace_window(
+    hass: HomeAssistant,
+    fake_api,
+    entity_registry: er.EntityRegistry,
+    freezer: FrozenDateTimeFactory,
 ):
     fake_api.data = router_data(device(PHONE_MAC, "Davids-iPhone"))
     entry = make_entry(hass)
     assert await setup_entry(hass, entry)
+    entity_id = tracker_entities(entity_registry, entry.entry_id)[PHONE_MAC]
 
     fake_api.data = router_data()  # a real, empty list: everyone left
-    for _ in range(PRUNE_GRACE - 1):
-        await poll(hass, entry)
-        assert PHONE_MAC in tracker_entities(entity_registry, entry.entry_id)
+    await poll(hass, entry)  # the first poll without it starts the clock
+    freezer.tick(PRUNE_AFTER - timedelta(seconds=1))
+    await poll(hass, entry)
+    assert PHONE_MAC in tracker_entities(entity_registry, entry.entry_id)
+    assert hass.states.get(entity_id).state == STATE_NOT_HOME
 
+    freezer.tick(timedelta(seconds=1))
     await poll(hass, entry)
     assert PHONE_MAC not in tracker_entities(entity_registry, entry.entry_id)
+
+
+async def test_a_brief_drop_keeps_the_same_tracker(
+    hass: HomeAssistant,
+    fake_api,
+    entity_registry: er.EntityRegistry,
+    freezer: FrozenDateTimeFactory,
+):
+    # What the three-poll grace got wrong: a client off the list for a couple
+    # of minutes had its tracker deleted and a new one registered in its place.
+    fake_api.data = router_data(device(PHONE_MAC, "Davids-iPhone"))
+    entry = make_entry(hass)
+    assert await setup_entry(hass, entry)
+    entity_id = tracker_entities(entity_registry, entry.entry_id)[PHONE_MAC]
+    registry_id = entity_registry.async_get(entity_id).id
+
+    fake_api.data = router_data()
+    for _ in range(6):  # three minutes of 30 s polls
+        await poll(hass, entry)
+        freezer.tick(timedelta(seconds=30))
+    assert hass.states.get(entity_id).state == STATE_NOT_HOME
+
+    fake_api.data = router_data(device(PHONE_MAC, "Davids-iPhone"))
+    await poll(hass, entry)
+    assert hass.states.get(entity_id).state == STATE_HOME
+    # the same registry entry, not a deleted one re-created under its name
+    assert entity_registry.async_get(entity_id).id == registry_id
 
 
 # --------------------------------------------------------------------------
@@ -251,7 +316,10 @@ async def test_a_device_that_leaves_is_pruned_after_the_grace_window(
 
 
 async def test_a_missing_device_list_never_prunes_trackers(
-    hass: HomeAssistant, fake_api, entity_registry: er.EntityRegistry
+    hass: HomeAssistant,
+    fake_api,
+    entity_registry: er.EntityRegistry,
+    freezer: FrozenDateTimeFactory,
 ):
     fake_api.data = router_data(device(PHONE_MAC, "Davids-iPhone"))
     entry = make_entry(hass)
@@ -260,8 +328,7 @@ async def test_a_missing_device_list_never_prunes_trackers(
 
     # the rest of the poll landed, but the device list did not
     fake_api.data = router_data(list_valid=False)
-    for _ in range(PRUNE_GRACE + 2):
-        await poll(hass, entry)
+    await poll_beyond_grace(hass, entry, freezer)
 
     assert PHONE_MAC in tracker_entities(entity_registry, entry.entry_id)
     # and it keeps reporting what was last known, rather than going away
@@ -319,7 +386,10 @@ async def test_an_unreachable_router_fails_setup_instead_of_emptying_it(
 
 
 async def test_a_failed_poll_makes_trackers_unavailable_without_removing_them(
-    hass: HomeAssistant, fake_api, entity_registry: er.EntityRegistry
+    hass: HomeAssistant,
+    fake_api,
+    entity_registry: er.EntityRegistry,
+    freezer: FrozenDateTimeFactory,
 ):
     fake_api.data = router_data(device(PHONE_MAC, "Davids-iPhone"))
     entry = make_entry(hass)
@@ -327,8 +397,7 @@ async def test_a_failed_poll_makes_trackers_unavailable_without_removing_them(
     entity_id = tracker_entities(entity_registry, entry.entry_id)[PHONE_MAC]
 
     fake_api.error = HuaweiOntConnectionError("connection reset")
-    for _ in range(PRUNE_GRACE + 2):
-        await poll(hass, entry)
+    await poll_beyond_grace(hass, entry, freezer)
 
     assert hass.states.get(entity_id).state == STATE_UNAVAILABLE
     assert PHONE_MAC in tracker_entities(entity_registry, entry.entry_id)
@@ -340,7 +409,10 @@ async def test_a_failed_poll_makes_trackers_unavailable_without_removing_them(
 
 
 async def test_a_renamed_tracker_survives_but_reports_away(
-    hass: HomeAssistant, fake_api, entity_registry: er.EntityRegistry
+    hass: HomeAssistant,
+    fake_api,
+    entity_registry: er.EntityRegistry,
+    freezer: FrozenDateTimeFactory,
 ):
     fake_api.data = router_data(device(PHONE_MAC, "Davids-iPhone"))
     entry = make_entry(hass)
@@ -351,8 +423,7 @@ async def test_a_renamed_tracker_survives_but_reports_away(
 
     # the MAC drops out of the router's list entirely
     fake_api.data = router_data(device(LAPTOP_MAC, "Laptop"))
-    for _ in range(PRUNE_GRACE + 2):
-        await poll(hass, entry)
+    await poll_beyond_grace(hass, entry, freezer)
 
     assert PHONE_MAC in tracker_entities(entity_registry, entry.entry_id)
     assert hass.states.get(entity_id).state == STATE_NOT_HOME
