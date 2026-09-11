@@ -193,9 +193,11 @@ command; retry, or restart HA first.
 
 ## Gotchas
 
-- **The deployed copy drifts.** `Z:\custom_components\huawei_ont\manifest.json`
-  is at **1.0.2** while the repo is at **1.0.4** — check that before debugging
-  live behaviour, and bump `version` in the same commit as the change.
+- **The deployed copy can drift.** Nothing keeps `Z:` in step with the repo
+  except running `deploy.ps1`, which prints both versions (`from … (vX)` /
+  `to … (vY)`). Compare `Z:\custom_components\huawei_ont\manifest.json` with the
+  repo before debugging live behaviour, and bump `version` in the same commit as
+  the change.
 - **One admin session.** A browser login to the ONT web UI fights the
   integration for it; each side steals it back. Disable the integration first.
 - **No options flow.** Host, credentials and scan interval are settable only at
