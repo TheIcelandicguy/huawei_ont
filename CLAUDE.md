@@ -164,7 +164,7 @@ saying so. That venv also has HA installed, though, so pytest auto-loads the
 `pytest_homeassistant_custom_component` plugin and dies on `fcntl` before
 `conftest.py` runs — CI's Windows job never has it installed. Locally:
 `cmd /c "set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1&& .venv\Scripts\pytest.exe -q tests\test_api.py"`
-(via `cmd`, because PowerShell mangles `$env:` through the MCP layer). The full
+(via `cmd`: Desktop Commander's default shell is Windows PowerShell 5.1 and nested quoting of `$env:` breaks there; Claude Code's own pwsh 7 tool handles it directly). The full
 suite runs in WSL Ubuntu from `/mnt/e/huawei_ont` with
 `~/ha-test-venv/bin/python -m pytest -q` (phcc 0.13.316, HA 2026.2.3, py3.12). `api.py` is kept HA-free precisely so `test_api.py` runs anywhere, and
 `conftest.load_standalone()` imports `api`/`oui` straight off disk to bypass the
