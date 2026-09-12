@@ -1,6 +1,8 @@
 # Huawei OptiXstar ONT — Home Assistant integration
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+[![GitHub Release](https://img.shields.io/github/release/TheIcelandicguy/huawei_ont.svg)](https://github.com/TheIcelandicguy/huawei_ont/releases)
+[![Downloads](https://img.shields.io/github/downloads/TheIcelandicguy/huawei_ont/total?color=brightgreen)](https://github.com/TheIcelandicguy/huawei_ont/releases)
 
 A local-polling Home Assistant integration for **Huawei OptiXstar** optical
 network terminals / routers. It logs into the device's web UI, scrapes the
