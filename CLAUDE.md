@@ -1,7 +1,7 @@
 # CLAUDE.md — huawei_ont
 
 Home Assistant custom integration for **Huawei OptiXstar** ONTs. Domain
-`huawei_ont`, **v1.0.4** (`custom_components/huawei_ont/manifest.json`),
+`huawei_ont`, **v1.0.5** (`custom_components/huawei_ont/manifest.json`),
 `integration_type: hub`, `iot_class: local_polling`, `requirements: []` — no
 third-party deps; `api.py` uses only `requests`, which HA already ships. Repo
 `TheIcelandicguy/huawei_ont`, branch `main`; HACS custom repo, min HA `2024.1.0`.
@@ -18,13 +18,13 @@ HW/SW versions come off the device at runtime from `stDeviceInfo`;
 
 ```
 custom_components/huawei_ont/
-  api.py          945 lines — ALL device I/O and scraping. No HA imports.
+  api.py          971 lines — ALL device I/O and scraping. No HA imports.
   coordinator.py  DataUpdateCoordinator, executor wrapper around api
   __init__.py     setup/unload; config_flow.py one step, unique_id = host
   const.py        DOMAIN, CONF_*, DEFAULT_HOST 192.168.0.1, admin, 30
   sensor.py binary_sensor.py switch.py button.py device_tracker.py
   oui.py + oui_db.csv   offline IEEE OUI -> vendor; strings.json; translations/
-tests/  conftest.py, test_api.py (39), test_device_tracker.py (20)
+tests/  conftest.py, test_api.py (43), test_device_tracker.py (20)
 ```
 
 ## How it talks to the ONT (the non-obvious part)

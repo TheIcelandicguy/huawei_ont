@@ -6,6 +6,7 @@ and the session is replaced with a scripted fake, so no router is contacted.
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -412,6 +413,62 @@ def test_post_gives_up_when_the_re_login_fails():
     assert client._authenticated is False
 
 
+def test_a_token_bearing_post_is_not_replayed_after_a_re_login():
+    """The onttoken in the payload died with the session, so a replay is a
+    guaranteed second 403. Re-authenticate, then hand back to the caller."""
+    attempts = {"n": 0}
+
+    def handler(session, method, path, data):
+        login = login_response(session, path)
+        if login is not None:
+            return login
+        attempts["n"] += 1
+        return FakeResponse(403, "")
+
+    client = make_client(handler)
+    client._authenticated = True
+    assert client._post("/some/path", "x.X_HW_Token=dead",
+                        carries_token=True) is None
+    # exactly one attempt: the original. No replay.
+    assert attempts["n"] == 1
+    # the re-login still happened, so the next caller starts on a live session
+    assert api.URL_LOGIN in client._session.paths()
+    assert client._authenticated
+
+
+def test_a_token_bearing_post_does_not_warn_about_a_recoverable_session_loss(
+    caplog,
+):
+    def handler(session, method, path, data):
+        return login_response(session, path) or FakeResponse(403, "")
+
+    client = make_client(handler)
+    client._authenticated = True
+    with caplog.at_level(logging.WARNING):
+        client._post("/some/path", "x.X_HW_Token=dead", carries_token=True)
+    assert caplog.records == []
+
+
+def test_a_plain_post_is_still_replayed_after_a_re_login():
+    """The contrast with the test above: a payload with no token in it is
+    perfectly replayable, and replaying it is what hides the session loss."""
+    attempts = {"n": 0}
+
+    def handler(session, method, path, data):
+        login = login_response(session, path)
+        if login is not None:
+            return login
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return FakeResponse(403, "")
+        return FakeResponse(200, "body")
+
+    client = make_client(handler)
+    client._authenticated = True
+    assert client._post("/some/path") == "body"
+    assert attempts["n"] == 2
+
+
 def test_successful_login_bumps_the_auth_generation():
     client = make_client(lambda s, m, p, d: login_response(s, p))
     before = client._auth_generation
@@ -523,14 +580,16 @@ def test_the_whole_sequence_is_retried_when_a_re_login_voids_the_token(
 
     class Script(BuildScript):
         def __call__(self, session, method, path, data):
-            if path == api.URL_USER_DEV_SET_STATE and self.creating_posts < 2:
-                # the router evicted the session; _post re-logs-in and retries,
-                # but the token in `data` belonged to the dead session
+            if path == api.URL_USER_DEV_SET_STATE and self.creating_posts < 1:
+                # the router evicted the session; _post re-logs-in, but the
+                # token in `data` belonged to the dead session, so it is not
+                # replayed — the caller refetches it and runs the whole
+                # sequence again
                 self.creating_posts += 1
                 return FakeResponse(403, "")
             return super().__call__(session, method, path, data)
 
-    script = Script(["Creating", "Completed"])
+    script = Script(["Creating", "Creating", "Completed"])
     client = make_client(script, clock, monkeypatch)
     client._authenticated = True
 
@@ -538,6 +597,77 @@ def test_the_whole_sequence_is_retried_when_a_re_login_voids_the_token(
     # a fresh token was fetched for the second run through
     assert script.token_pages == 2
     assert script.device_reads == 1
+    # the dead token was posted once, not twice: one failure, then the retry
+    assert client._session.paths("POST").count(api.URL_USER_DEV_SET_STATE) == 2
+
+
+class ExpiringRouter(BuildScript):
+    """A router that checks the onttoken against the live login session.
+
+    The real one ties the token to the session that fetched it and answers
+    403 to any token-bearing request carrying a different one. That is what
+    made a single expiry cost two failed requests and two logins: the token
+    cached from the previous poll is stale for the whole of the next one.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.token = "deadbeef0"
+        self.alive = True
+        self.logins = 0
+
+    def expire(self) -> None:
+        """The router drops the session on its own, as it does every ~140s."""
+        self.alive = False
+
+    def __call__(self, session, method, path, data):
+        if path == api.URL_GET_RAND_COUNT:
+            return FakeResponse(200, "﻿1234567890\n")
+        if path == api.URL_LOGIN:
+            self.logins += 1
+            self.alive = True
+            self.token = f"deadbeef{self.logins}"
+            session.cookies["CookieHttps"] = "sessioncookie"
+            return FakeResponse(200, "")
+        if not self.alive:
+            return FakeResponse(403, "")
+        if data and "x.X_HW_Token=" in data:
+            sent = data.split("x.X_HW_Token=")[1].split("&")[0]
+            if sent != self.token:
+                return FakeResponse(403, "")
+        if path == api.URL_USER_DEV_PAGE:
+            self.token_pages += 1
+            return FakeResponse(
+                200,
+                f'<input id="onttoken" type="hidden" value="{self.token}">',
+            )
+        return super().__call__(session, method, path, data)
+
+
+def test_an_expired_session_costs_one_login_and_one_failed_request(
+    monkeypatch, caplog,
+):
+    """The regression this whole change exists for.
+
+    Before it, one expiry produced four dead requests, two logins and two
+    warnings a cycle — about 1,100 log lines a day on a 30s poll — while the
+    device list still arrived, so nothing looked broken but the log.
+    """
+    clock = FakeClock()
+    script = ExpiringRouter(["Creating", "Completed"])
+    client = make_client(script, clock, monkeypatch)
+    client._authenticated = True
+
+    # a healthy poll leaves the token cached
+    assert client._get_user_dev_token() == "deadbeef0"
+    script.expire()
+
+    with caplog.at_level(logging.WARNING):
+        assert client._fetch_user_devices() is not None
+
+    assert script.logins == 1
+    assert script.device_reads == 1
+    assert caplog.records == []
 
 
 def test_a_none_body_is_not_a_device_list(monkeypatch):
