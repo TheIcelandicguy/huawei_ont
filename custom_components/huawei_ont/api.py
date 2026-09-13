@@ -440,6 +440,7 @@ class HuaweiOntApi:
         path: str,
         data: str | None = None,
         timeout: int = POST_TIMEOUT,
+        carries_token: bool = False,
     ) -> str | None:
         """POST to a path on an authenticated session, returning the body.
 
@@ -448,6 +449,13 @@ class HuaweiOntApi:
         so redirects must stay unfollowed — following one turns session loss
         into a perfectly ordinary 200 carrying the login form, and the client
         would sit there logged out until Home Assistant restarts.
+
+        `carries_token` marks a payload with an onttoken baked into it. Such a
+        payload cannot be replayed after a re-login: the token belonged to the
+        session that just died, so the replay is a guaranteed second 403 and
+        the only thing it adds is a warning in the log. Those callers get None
+        and are expected to drop the cached token and run their sequence
+        again on the fresh session.
         """
         session = self._ensure_session()
         if not self._authenticated:
@@ -466,6 +474,13 @@ class HuaweiOntApi:
                 _LOGGER.debug("Session expired, re-authenticating")
                 self._authenticated = False
                 if self.authenticate():
+                    if carries_token:
+                        _LOGGER.debug(
+                            "Not replaying %s: its onttoken died with the "
+                            "old session",
+                            path,
+                        )
+                        return None
                     r = session.post(
                         url, data=data, headers=headers, timeout=timeout,
                         allow_redirects=False,
@@ -497,6 +512,7 @@ class HuaweiOntApi:
             URL_USER_DEV_GET_STATE,
             f"State&x.X_HW_Token={token}",
             timeout=STATE_POST_TIMEOUT,
+            carries_token=True,
         )
         return _decode_hex(state) if state is not None else None
 
@@ -522,6 +538,7 @@ class HuaweiOntApi:
         only when asked, so a plain read returns either "NONE" (never built)
         or a stale snapshot from whenever it was last generated.
         """
+        generation = self._auth_generation
         token = self._get_user_dev_token()
         if not token:
             return None
@@ -530,12 +547,20 @@ class HuaweiOntApi:
         # again proves nothing about the rebuild we are about to request. Note
         # that up front and hold out for the state to change.
         before = self._read_build_state(token)
+        if before is None and self._auth_generation != generation:
+            # The session was replaced under us, which killed the token we are
+            # holding. Posting the rest of the sequence with it would only
+            # collect another 403 and another login; hand back to the caller,
+            # which refetches the token and runs the whole thing again.
+            self._user_dev_token = None
+            return None
         stale = before is not None and "Completed" in before
 
         if self._post(
             URL_USER_DEV_SET_STATE,
             f"x.State=Creating&x.X_HW_Token={token}",
             timeout=STATE_POST_TIMEOUT,
+            carries_token=True,
         ) is None:
             # a rejected token usually means the session was replaced
             self._user_dev_token = None
