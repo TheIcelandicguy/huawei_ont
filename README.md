@@ -90,8 +90,8 @@ up correctly in the Wi-Fi switch names.
 integration.** A tracker's default name is the DHCP hostname the device
 announces, and DHCP hostnames are restricted to ASCII letters, digits and
 hyphens ([RFC 1123](https://www.rfc-editor.org/rfc/rfc1123)). Phones therefore
-transliterate before sending: a phone named `Anna-sími` announces itself as
-`Anna-simi`, and `Davíð Thor's S25 Ultra` arrives as `David-THor-s-S25-Ultra`.
+transliterate before sending: a phone named `Sigríður-sími` announces itself as
+`Sigridur-simi`, and `Þórður's S25 Ultra` arrives as `THordur-s-S25-Ultra`.
 The accented form never reaches the router, so it cannot be recovered here —
 rename the tracker in Home Assistant if you want the correct spelling (which
 also pins it, see above).

@@ -1,12 +1,26 @@
-"""Standalone test — run: python test_connection.py <password> [host] [username]"""
+"""Talk to the ONT without Home Assistant: log in, fetch once, print it.
+
+Run from the repo root:
+    python tools/test_connection.py <password> [host] [username]
+
+A development aid, not part of the integration. It lives outside
+custom_components/ so it never ships in a release or lands on a live
+config. Log out of the router's web UI first: the ONT allows one admin
+session, and this script takes it.
+"""
 
 import sys
-from api import HuaweiOntApi, HuaweiOntConnectionError
+from pathlib import Path
+
+# api.py has no Home Assistant imports, so it loads straight off disk.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent
+                       / "custom_components" / "huawei_ont"))
+from api import HuaweiOntApi, HuaweiOntConnectionError  # noqa: E402
 
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python test_connection.py <password> [host] [username]")
+        print("Usage: python tools/test_connection.py <password> [host] [username]")
         sys.exit(1)
 
     password = sys.argv[1]
@@ -68,4 +82,5 @@ def main():
     print("\nDone.")
 
 
-main()
+if __name__ == "__main__":
+    main()

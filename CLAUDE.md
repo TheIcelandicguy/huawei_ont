@@ -187,8 +187,7 @@ Source on `E:`, the HA config root is mapped to `Z:`:
 
 `deploy.ps1` is a thin wrapper over `E:\tools\deploy-to-ha.ps1`: `robocopy /E
 /R:2 /W:2` (`/E`, never `/MIR`) excluding `__pycache__`, `.git`, `.claude`,
-`.venv`, `tests`, `*.pyc`/`*.pyo`, `settings.local.json` and `test_*.py` — the
-last one is what keeps `test_connection.py` off the live config. It refuses to
+`.venv`, `tests`, `*.pyc`/`*.pyo`, `settings.local.json` and `test_*.py`. It refuses to
 run unless `Z:\configuration.yaml` exists, warns about files on `Z:` newer than
 `E:`, lists files on `Z:` the repo no longer has (`/E` never deletes; remove a
 stale module by hand), and checks the deployed manifest version.
@@ -215,9 +214,10 @@ error instead of a hang; if the copy fails on a lock, restart HA and re-run.
 - **`_parse_ont_state` has a dead branch** — its `gpon` and `else` arms both call
   `_parse_constructors(html, "OntStateInfo")`. Harmless (this unit reports
   `PonMode == "ge"`, deriving ONT state from WAN status) but unfinished code.
-- **`test_connection.py` ships inside the component dir** and does a bare
-  `from api import …`, so it runs only with cwd set there, and deploys to `Z:`
-  too. Usage: `python test_connection.py <password> [host] [username]`.
-- **DHCP hostnames are ASCII** (RFC 1123): `Davíð` arrives as `David` and the
+- **`tools/test_connection.py`** logs in and prints one fetch without HA:
+  `python tools/test_connection.py <password> [host] [username]` from the repo
+  root. It lives outside the component so it never ships or deploys; log out
+  of the router UI first (one admin session).
+- **DHCP hostnames are ASCII** (RFC 1123): `Þórður` arrives as `THordur` and the
   accented form never reaches the ONT — rename in HA, which also pins. Devices
   behind a downstream NAT router are invisible; the ONT sees only its address.

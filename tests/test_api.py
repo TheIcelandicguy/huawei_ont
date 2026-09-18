@@ -292,10 +292,10 @@ def test_offline_device_keeps_its_status_and_row():
 def test_hostname_is_taken_from_whichever_row_carries_one():
     html = (
         device_row(host="--", ip="fe80::1", status="Online")
-        + device_row(host="Davids-iPhone", ip="192.168.0.11", status="Offline")
+        + device_row(host="Jons-iPhone", ip="192.168.0.11", status="Offline")
     )
     data = parse_devices(html)
-    assert data.devices[0].hostname == "Davids-iPhone"
+    assert data.devices[0].hostname == "Jons-iPhone"
 
 
 def test_counts_split_wifi_and_lan_clients():

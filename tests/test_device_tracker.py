@@ -172,10 +172,10 @@ def test_mac_from_unique_id_matches_scannerentitys_bare_mac():
 def test_rotated_twin_matches_a_single_offline_namesake():
     assert _find_rotated_twin(
         PHONE_MAC_ROTATED,
-        "Davids-iPhone",
-        ["Davids-iPhone"],
-        {PHONE_MAC: "Davids-iPhone", PHONE_MAC_ROTATED: "Davids-iPhone"},
-        [(PHONE_MAC, "Davids-iPhone")],
+        "Jons-iPhone",
+        ["Jons-iPhone"],
+        {PHONE_MAC: "Jons-iPhone", PHONE_MAC_ROTATED: "Jons-iPhone"},
+        [(PHONE_MAC, "Jons-iPhone")],
     ) == PHONE_MAC
 
 
@@ -214,10 +214,10 @@ def test_rotated_twin_refuses_a_stable_mac():
     # a burned-in MAC does not rotate, so a namesake is a different device
     assert _find_rotated_twin(
         PHONE_MAC_ROTATED,
-        "Davids-iPhone",
-        ["Davids-iPhone"],
-        {LAPTOP_MAC: "Davids-iPhone", PHONE_MAC_ROTATED: "Davids-iPhone"},
-        [(LAPTOP_MAC, "Davids-iPhone")],
+        "Jons-iPhone",
+        ["Jons-iPhone"],
+        {LAPTOP_MAC: "Jons-iPhone", PHONE_MAC_ROTATED: "Jons-iPhone"},
+        [(LAPTOP_MAC, "Jons-iPhone")],
     ) is None
 
 
@@ -230,7 +230,7 @@ async def test_online_devices_get_trackers(
     hass: HomeAssistant, fake_api, entity_registry: er.EntityRegistry
 ):
     fake_api.data = router_data(
-        device(PHONE_MAC, "Davids-iPhone"),
+        device(PHONE_MAC, "Jons-iPhone"),
         device(LAPTOP_MAC, "Laptop", interface="LAN1"),
     )
     entry = make_entry(hass)
@@ -246,7 +246,7 @@ async def test_a_poll_that_only_moves_online_time_writes_no_state(
 ):
     # online_duration moves on every poll; as an attribute it made each poll
     # a new state, and a new recorder row, for every tracker
-    fake_api.data = router_data(device(PHONE_MAC, "Davids-iPhone"))
+    fake_api.data = router_data(device(PHONE_MAC, "Jons-iPhone"))
     entry = make_entry(hass)
     assert await setup_entry(hass, entry)
     entity_id = tracker_entities(entity_registry, entry.entry_id)[PHONE_MAC]
@@ -254,7 +254,7 @@ async def test_a_poll_that_only_moves_online_time_writes_no_state(
     assert "online_duration" not in before.attributes
 
     fake_api.data = router_data(
-        device(PHONE_MAC, "Davids-iPhone", online_duration="630")
+        device(PHONE_MAC, "Jons-iPhone", online_duration="630")
     )
     await poll(hass, entry)
     assert hass.states.get(entity_id).last_updated == before.last_updated
@@ -266,7 +266,7 @@ async def test_a_device_that_leaves_is_pruned_after_the_grace_window(
     entity_registry: er.EntityRegistry,
     freezer: FrozenDateTimeFactory,
 ):
-    fake_api.data = router_data(device(PHONE_MAC, "Davids-iPhone"))
+    fake_api.data = router_data(device(PHONE_MAC, "Jons-iPhone"))
     entry = make_entry(hass)
     assert await setup_entry(hass, entry)
     entity_id = tracker_entities(entity_registry, entry.entry_id)[PHONE_MAC]
@@ -291,7 +291,7 @@ async def test_a_brief_drop_keeps_the_same_tracker(
 ):
     # What the three-poll grace got wrong: a client off the list for a couple
     # of minutes had its tracker deleted and a new one registered in its place.
-    fake_api.data = router_data(device(PHONE_MAC, "Davids-iPhone"))
+    fake_api.data = router_data(device(PHONE_MAC, "Jons-iPhone"))
     entry = make_entry(hass)
     assert await setup_entry(hass, entry)
     entity_id = tracker_entities(entity_registry, entry.entry_id)[PHONE_MAC]
@@ -303,7 +303,7 @@ async def test_a_brief_drop_keeps_the_same_tracker(
         freezer.tick(timedelta(seconds=30))
     assert hass.states.get(entity_id).state == STATE_NOT_HOME
 
-    fake_api.data = router_data(device(PHONE_MAC, "Davids-iPhone"))
+    fake_api.data = router_data(device(PHONE_MAC, "Jons-iPhone"))
     await poll(hass, entry)
     assert hass.states.get(entity_id).state == STATE_HOME
     # the same registry entry, not a deleted one re-created under its name
@@ -321,7 +321,7 @@ async def test_a_missing_device_list_never_prunes_trackers(
     entity_registry: er.EntityRegistry,
     freezer: FrozenDateTimeFactory,
 ):
-    fake_api.data = router_data(device(PHONE_MAC, "Davids-iPhone"))
+    fake_api.data = router_data(device(PHONE_MAC, "Jons-iPhone"))
     entry = make_entry(hass)
     assert await setup_entry(hass, entry)
     entity_id = tracker_entities(entity_registry, entry.entry_id)[PHONE_MAC]
@@ -342,7 +342,7 @@ async def test_setup_does_not_prune_when_the_router_returned_no_list(
     entry = make_entry(hass)
     entity_registry.async_get_or_create(
         "device_tracker", DOMAIN, PHONE_MAC,
-        config_entry=entry, original_name="Davids-iPhone",
+        config_entry=entry, original_name="Jons-iPhone",
     )
 
     fake_api.data = router_data(list_valid=False)
@@ -360,7 +360,7 @@ async def test_setup_prunes_stale_trackers_when_the_list_is_good(
         config_entry=entry, original_name="LongGone",
     )
 
-    fake_api.data = router_data(device(PHONE_MAC, "Davids-iPhone"))
+    fake_api.data = router_data(device(PHONE_MAC, "Jons-iPhone"))
     assert await setup_entry(hass, entry)
 
     trackers = tracker_entities(entity_registry, entry.entry_id)
@@ -374,7 +374,7 @@ async def test_an_unreachable_router_fails_setup_instead_of_emptying_it(
     entry = make_entry(hass)
     entity_registry.async_get_or_create(
         "device_tracker", DOMAIN, PHONE_MAC,
-        config_entry=entry, original_name="Davids-iPhone",
+        config_entry=entry, original_name="Jons-iPhone",
     )
 
     fake_api.error = HuaweiOntConnectionError("no route to host")
@@ -391,7 +391,7 @@ async def test_a_failed_poll_makes_trackers_unavailable_without_removing_them(
     entity_registry: er.EntityRegistry,
     freezer: FrozenDateTimeFactory,
 ):
-    fake_api.data = router_data(device(PHONE_MAC, "Davids-iPhone"))
+    fake_api.data = router_data(device(PHONE_MAC, "Jons-iPhone"))
     entry = make_entry(hass)
     assert await setup_entry(hass, entry)
     entity_id = tracker_entities(entity_registry, entry.entry_id)[PHONE_MAC]
@@ -414,11 +414,11 @@ async def test_a_renamed_tracker_survives_but_reports_away(
     entity_registry: er.EntityRegistry,
     freezer: FrozenDateTimeFactory,
 ):
-    fake_api.data = router_data(device(PHONE_MAC, "Davids-iPhone"))
+    fake_api.data = router_data(device(PHONE_MAC, "Jons-iPhone"))
     entry = make_entry(hass)
     assert await setup_entry(hass, entry)
     entity_id = tracker_entities(entity_registry, entry.entry_id)[PHONE_MAC]
-    entity_registry.async_update_entity(entity_id, name="Davids phone")
+    entity_registry.async_update_entity(entity_id, name="Jons phone")
     await hass.async_block_till_done()
 
     # the MAC drops out of the router's list entirely
@@ -432,19 +432,19 @@ async def test_a_renamed_tracker_survives_but_reports_away(
 async def test_a_pinned_tracker_follows_an_offline_row(
     hass: HomeAssistant, fake_api, entity_registry: er.EntityRegistry
 ):
-    fake_api.data = router_data(device(PHONE_MAC, "Davids-iPhone"))
+    fake_api.data = router_data(device(PHONE_MAC, "Jons-iPhone"))
     entry = make_entry(hass)
     assert await setup_entry(hass, entry)
     entity_id = tracker_entities(entity_registry, entry.entry_id)[PHONE_MAC]
-    entity_registry.async_update_entity(entity_id, name="Davids phone")
+    entity_registry.async_update_entity(entity_id, name="Jons phone")
     await hass.async_block_till_done()
 
     # still listed, but offline now
-    fake_api.data = router_data(device(PHONE_MAC, "Davids-iPhone", status="Offline"))
+    fake_api.data = router_data(device(PHONE_MAC, "Jons-iPhone", status="Offline"))
     await poll(hass, entry)
     assert hass.states.get(entity_id).state == STATE_NOT_HOME
 
-    fake_api.data = router_data(device(PHONE_MAC, "Davids-iPhone"))
+    fake_api.data = router_data(device(PHONE_MAC, "Jons-iPhone"))
     await poll(hass, entry)
     assert hass.states.get(entity_id).state == STATE_HOME
 
@@ -457,18 +457,18 @@ async def test_a_pinned_tracker_follows_an_offline_row(
 async def test_a_rotated_mac_keeps_the_existing_tracker(
     hass: HomeAssistant, fake_api, entity_registry: er.EntityRegistry
 ):
-    fake_api.data = router_data(device(PHONE_MAC, "Davids-iPhone"))
+    fake_api.data = router_data(device(PHONE_MAC, "Jons-iPhone"))
     entry = make_entry(hass)
     assert await setup_entry(hass, entry)
     entity_id = tracker_entities(entity_registry, entry.entry_id)[PHONE_MAC]
-    entity_registry.async_update_entity(entity_id, name="Davids phone")
+    entity_registry.async_update_entity(entity_id, name="Jons phone")
     await hass.async_block_till_done()
 
     # the phone comes back under a fresh randomised MAC; the old one lingers
     # in the router's lease history
     fake_api.data = router_data(
-        device(PHONE_MAC, "Davids-iPhone", status="Offline"),
-        device(PHONE_MAC_ROTATED, "Davids-iPhone"),
+        device(PHONE_MAC, "Jons-iPhone", status="Offline"),
+        device(PHONE_MAC_ROTATED, "Jons-iPhone"),
     )
     await poll(hass, entry)
 
