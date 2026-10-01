@@ -1,7 +1,7 @@
 # CLAUDE.md — huawei_ont
 
 Home Assistant custom integration for **Huawei OptiXstar** ONTs. Domain
-`huawei_ont`, **v1.0.5** (`custom_components/huawei_ont/manifest.json`),
+`huawei_ont`, **v1.1.0** (`custom_components/huawei_ont/manifest.json`),
 `integration_type: hub`, `iot_class: local_polling`, `requirements: []` — no
 third-party deps; `api.py` uses only `requests`, which HA already ships. Repo
 `TheIcelandicguy/huawei_ont`, branch `main`; HACS custom repo, min HA `2024.1.0`.
@@ -18,13 +18,14 @@ HW/SW versions come off the device at runtime from `stDeviceInfo`;
 
 ```
 custom_components/huawei_ont/
-  api.py          971 lines — ALL device I/O and scraping. No HA imports.
+  api.py          1168 lines — ALL device I/O and scraping. No HA imports.
   coordinator.py  DataUpdateCoordinator, executor wrapper around api
   __init__.py     setup/unload; config_flow.py one step, unique_id = host
   const.py        DOMAIN, CONF_*, DEFAULT_HOST 192.168.0.1, admin, 30
   sensor.py binary_sensor.py switch.py button.py device_tracker.py
+  services.py + services.yaml   set_static_ip / clear_static_ip
   oui.py + oui_db.csv   offline IEEE OUI -> vendor; strings.json; translations/
-tests/  conftest.py, test_api.py (43), test_device_tracker.py (20)
+tests/  conftest.py, test_api.py (66), test_device_tracker.py (20), test_static_ip.py (9)
 ```
 
 ## How it talks to the ONT (the non-obvious part)
@@ -64,7 +65,7 @@ Pages per cycle (`get_router_data`): `deviceinfo.asp` (CPU/mem/ident),
 `wan_list_cache_wan.asp` (`WanIP`, the entry whose service contains `INTERNET`),
 `get_wan_list_ipwanstat.asp` (`WaninfoStats`, matched on WAN domain path),
 `ontstate.asp`, user-device list, `opticinfo.asp`, `ethinfo.asp` (`GEInfo` → LAN
-ports), `WlanBasic.asp?2G`.
+ports), `WlanBasic.asp?2G`, `dhcpstatic.asp` (reservations).
 
 ### The device-list rebuild handshake
 
@@ -106,10 +107,34 @@ Plain `DataUpdateCoordinator[RouterData]`, interval from the config entry,
 cheap — 8 page fetches plus the rebuild handshake; timeouts are GET 15 s, POST
 25 s, state POSTs 10 s. Keep the worst case under the interval.
 
+## DHCP static IP reservations
+
+The ONT's *Advanced > LAN > DHCP Static IP* page holds up to 16 MAC -> IP
+reservations. `dhcpstatic.asp` lists them as `new stDhcp(domain, enable, ip,
+mac)` (positions `_SB_*`, hex-escaped) and carries the `onttoken`; writes go to
+`add.cgi` / `set.cgi?x=<row domain>` (`x.Yiaddr`, `x.Chaddr`, `x.Enable`) and
+`del.cgi` (the row domain as an empty-valued key), all sitting next to the page
+under `/html/bbsp/dhcpstatic/`. Every poll reads the table into
+`RouterData.static_bindings` (`None` = page not read, never "no reservations").
+
+`HuaweiOntApi.set_static_ip` / `remove_static_ip` refuse a duplicate IP or a
+full table before writing, then **re-read the page and raise if the router did
+not keep the change** — the page answers 200 either way. A session lost mid-way
+reruns the read-token-write sequence once (`_post(..., carries_token=True)`).
+A reservation only takes effect when the device next renews or reconnects.
+The write paths were built from the pasted page source; verify them against the
+live router after any firmware change.
+
+Surfaces: services `huawei_ont.set_static_ip` (entity_id or mac_address, optional
+ip_address — omitted pins the device's current address) and
+`huawei_ont.clear_static_ip`; a `static_ip` attribute on trackers; and one
+`switch` per device, **disabled by default** (`HuaweiOntStaticIpSwitch`, keyed
+`<entry_id>_static_ip_<mac>`), on while a reservation exists.
+
 ## Entities
 
 `PLATFORMS = ["sensor", "binary_sensor", "button", "device_tracker", "switch"]`,
-all on one device (`identifiers={(DOMAIN, entry.entry_id)}`). **No services.**
+all on one device (`identifiers={(DOMAIN, entry.entry_id)}`). Two services (below).
 
 - **sensor** (15, description-driven with `value_fn`): CPU %, memory %, WAN IP,
   WAN uptime (`Nd Nh Nm`), download/upload rate (Mbit/s from counter deltas),

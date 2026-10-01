@@ -1,0 +1,27 @@
+set_static_ip:
+  fields:
+    entity_id:
+      selector:
+        entity:
+          integration: huawei_ont
+          domain: device_tracker
+    mac_address:
+      example: "aa:bb:cc:dd:ee:ff"
+      selector:
+        text:
+    ip_address:
+      example: "192.168.0.50"
+      selector:
+        text:
+
+clear_static_ip:
+  fields:
+    entity_id:
+      selector:
+        entity:
+          integration: huawei_ont
+          domain: device_tracker
+    mac_address:
+      example: "aa:bb:cc:dd:ee:ff"
+      selector:
+        text:

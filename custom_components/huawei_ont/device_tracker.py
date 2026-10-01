@@ -361,6 +361,11 @@ class HuaweiOntDeviceTracker(
         v = vendor(self._mac)
         if v:
             attrs["vendor"] = v
+        # changes only when a reservation is made or dropped, so it costs no
+        # recorder rows
+        reserved = self.coordinator.reserved_ip(self._mac)
+        if reserved:
+            attrs["static_ip"] = reserved
         return attrs
 
     @property

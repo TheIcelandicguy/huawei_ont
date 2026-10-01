@@ -81,6 +81,22 @@ devices` is the total and equals the sum of the two.
 Devices behind a second router doing **NAT** are not visible at all — the ONT
 only ever sees that router's own address.
 
+### Static IP reservations
+
+The router's DHCP server can always hand a device the same address. From Home
+Assistant:
+
+- `huawei_ont.set_static_ip` with a device tracker (or a `mac_address`) and an
+  optional `ip_address`. Leave the address out to pin the one the device has
+  now.
+- `huawei_ont.clear_static_ip` releases it.
+- Each device also has a **Static IP** switch (disabled by default — enable the
+  ones you want). Turning it on pins the current address; off releases it.
+  Trackers show the reserved address as `static_ip`.
+
+A reservation applies when the device next renews its lease or reconnects. The
+router holds at most 16.
+
 ### Names and non-ASCII characters
 
 SSIDs are read as UTF-8, so a network called `Ásgarður` or `Þórsheimili` shows

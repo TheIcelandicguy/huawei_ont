@@ -22,28 +22,98 @@
   },
   "entity": {
     "sensor": {
-      "cpu_usage": { "name": "CPU usage" },
-      "memory_usage": { "name": "Memory usage" },
-      "wan_ip": { "name": "WAN IP address" },
-      "wan_uptime": { "name": "WAN uptime" },
-      "bytes_sent": { "name": "Bytes sent" },
-      "bytes_received": { "name": "Bytes received" },
-      "packets_sent": { "name": "Packets sent" },
-      "packets_received": { "name": "Packets received" },
-      "connected_devices": { "name": "Connected devices" },
-      "wifi_clients": { "name": "Wi-Fi clients" },
-      "lan_clients": { "name": "LAN clients" },
-      "download_rate": { "name": "Download rate" },
-      "upload_rate": { "name": "Upload rate" },
-      "optical_temperature": { "name": "Temperature" },
-      "optical_voltage": { "name": "Supply voltage" }
+      "cpu_usage": {
+        "name": "CPU usage"
+      },
+      "memory_usage": {
+        "name": "Memory usage"
+      },
+      "wan_ip": {
+        "name": "WAN IP address"
+      },
+      "wan_uptime": {
+        "name": "WAN uptime"
+      },
+      "bytes_sent": {
+        "name": "Bytes sent"
+      },
+      "bytes_received": {
+        "name": "Bytes received"
+      },
+      "packets_sent": {
+        "name": "Packets sent"
+      },
+      "packets_received": {
+        "name": "Packets received"
+      },
+      "connected_devices": {
+        "name": "Connected devices"
+      },
+      "wifi_clients": {
+        "name": "Wi-Fi clients"
+      },
+      "lan_clients": {
+        "name": "LAN clients"
+      },
+      "download_rate": {
+        "name": "Download rate"
+      },
+      "upload_rate": {
+        "name": "Upload rate"
+      },
+      "optical_temperature": {
+        "name": "Temperature"
+      },
+      "optical_voltage": {
+        "name": "Supply voltage"
+      }
     },
     "binary_sensor": {
-      "wan_connection": { "name": "WAN connection" },
-      "ont_status": { "name": "ONT status" }
+      "wan_connection": {
+        "name": "WAN connection"
+      },
+      "ont_status": {
+        "name": "ONT status"
+      }
     },
     "button": {
-      "reboot": { "name": "Reboot" }
+      "reboot": {
+        "name": "Reboot"
+      }
+    }
+  },
+  "services": {
+    "set_static_ip": {
+      "name": "Set static IP",
+      "description": "Reserve an IP address for a device on the router's DHCP server. Takes effect when the device next renews its lease or reconnects.",
+      "fields": {
+        "entity_id": {
+          "name": "Device tracker",
+          "description": "The device to reserve an address for."
+        },
+        "mac_address": {
+          "name": "MAC address",
+          "description": "Use instead of a device tracker, e.g. for a device that is offline."
+        },
+        "ip_address": {
+          "name": "IP address",
+          "description": "The address to reserve. Leave empty to pin the address the device has now."
+        }
+      }
+    },
+    "clear_static_ip": {
+      "name": "Clear static IP",
+      "description": "Remove a device's DHCP reservation.",
+      "fields": {
+        "entity_id": {
+          "name": "Device tracker",
+          "description": "The device to release."
+        },
+        "mac_address": {
+          "name": "MAC address",
+          "description": "Use instead of a device tracker."
+        }
+      }
     }
   }
 }

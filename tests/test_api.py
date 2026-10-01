@@ -775,3 +775,191 @@ def test_a_failed_stats_page_does_not_poison_the_rate_counters(monkeypatch):
     assert data.download_rate_mbps is None
     # storing zeroes would make the next real reading look like a 4GB spike
     assert client._last_counters is None
+
+
+# --------------------------------------------------------------------------
+# DHCP static IP reservations
+# --------------------------------------------------------------------------
+
+BIND_DOMAIN = api.DHCP_STATIC_DOMAIN
+
+
+class StaticRouter:
+    """A router whose DHCP Static IP page is backed by a real table.
+
+    Renders the page the way the firmware does (hex-escaped `stDhcp` rows plus
+    an onttoken) and applies add/set/del posts to it, so a test can assert on
+    what the router *ends up holding* rather than on what was sent.
+    """
+
+    def __init__(self, rows=(), accept=True) -> None:
+        self.rows = [list(r) for r in rows]  # [index, enabled, ip, MAC]
+        self.accept = accept
+        self.writes: list[tuple[str, dict]] = []
+
+    def page(self) -> str:
+        def esc(s):
+            return "".join("\\x%02x" % ord(c) if c in ".:" else c for c in s)
+
+        items = ",".join(
+            f'new stDhcp("{BIND_DOMAIN}.{i}","{en}","{esc(ip)}","{esc(mac)}")'
+            for i, en, ip, mac in self.rows
+        )
+        return (
+            f"var Dhcps = new Array({items + ',' if items else ''}null);"
+            + TOKEN_PAGE
+        )
+
+    def __call__(self, session, method, path, data):
+        login = login_response(session, path)
+        if login is not None:
+            return login
+        if path == api.URL_DHCP_STATIC:
+            return FakeResponse(200, self.page())
+        if method == "POST" and "/dhcpstatic/" in path:
+            from urllib.parse import parse_qsl
+            form = dict(parse_qsl(data, keep_blank_values=True))
+            assert form["x.X_HW_Token"] == TOKEN
+            self.writes.append((path.split("?")[0], form))
+            if not self.accept:
+                return FakeResponse(200, "")
+            if path.startswith("/html/bbsp/dhcpstatic/add.cgi"):
+                n = max([r[0] for r in self.rows], default=0) + 1
+                self.rows.append(
+                    [n, form["x.Enable"], form["x.Yiaddr"], form["x.Chaddr"]]
+                )
+            elif path.startswith("/html/bbsp/dhcpstatic/set.cgi"):
+                n = int(path.split("?x=")[1].split("&")[0].rsplit(".", 1)[1])
+                row = next(r for r in self.rows if r[0] == n)
+                row[2], row[3] = form["x.Yiaddr"], form["x.Chaddr"]
+                row[1] = form.get("x.Enable", row[1])
+            elif path.startswith("/html/bbsp/dhcpstatic/del.cgi"):
+                gone = {int(k.rsplit(".", 1)[1]) for k in form
+                        if k.startswith(BIND_DOMAIN)}
+                self.rows = [r for r in self.rows if r[0] not in gone]
+            return FakeResponse(200, "")
+        return None
+
+
+def static_client(router):
+    return make_client(router)
+
+
+def test_normalize_mac_accepts_either_separator_and_case():
+    assert api.normalize_mac("00-08-22-D1-BF-B9") == "00:08:22:d1:bf:b9"
+    with pytest.raises(ValueError):
+        api.normalize_mac("00:08:22:d1:bf")
+
+
+@pytest.mark.parametrize(
+    "bad", ["", "300.1.1.1", "224.0.0.1", "127.0.0.1", "0.0.0.0",
+            "255.255.255.255", "169.254.1.1", "fe80::1", "192.168.0"],
+)
+def test_validate_static_ip_rejects_unusable_addresses(bad):
+    with pytest.raises(ValueError):
+        api.validate_static_ip(bad)
+
+
+def test_the_reservation_table_is_read_with_its_hex_escapes_decoded():
+    router = StaticRouter([(1, "1", "192.168.0.158", "00:08:22:D1:BF:B9")])
+    bindings = api.HuaweiOntApi._parse_static_bindings(router.page())
+    assert bindings == [api.StaticBinding(
+        domain=f"{BIND_DOMAIN}.1", enabled=True,
+        ip="192.168.0.158", mac="00:08:22:d1:bf:b9",
+    )]
+
+
+def test_an_empty_table_is_not_the_same_as_an_unreadable_page():
+    parse = api.HuaweiOntApi._parse_static_bindings
+    assert parse(StaticRouter().page()) == []
+    assert parse("<html>login</html>") is None
+
+
+def test_a_poll_carries_the_reservations(monkeypatch):
+    router = StaticRouter([(1, "1", "192.168.0.158", "00:08:22:D1:BF:B9")])
+
+    def handler(session, method, path, data):
+        return router(session, method, path, data) if (
+            path == api.URL_DHCP_STATIC
+        ) else full_router(session, method, path, data)
+
+    data = make_client(handler, FakeClock(), monkeypatch).get_router_data()
+    assert [b.ip for b in data.static_bindings] == ["192.168.0.158"]
+
+
+def test_a_poll_without_the_page_leaves_the_reservations_unknown(monkeypatch):
+    client = make_client(full_router, FakeClock(), monkeypatch)
+    assert client.get_router_data().static_bindings is None
+
+
+def test_a_new_reservation_is_added_and_confirmed():
+    router = StaticRouter()
+    static_client(router).set_static_ip("AA-BB-CC-DD-EE-FF", "192.168.0.50")
+    assert router.rows == [[1, "1", "192.168.0.50", "AA:BB:CC:DD:EE:FF"]]
+    path, form = router.writes[0]
+    assert path == "/html/bbsp/dhcpstatic/add.cgi"
+    assert form["x.Yiaddr"] == "192.168.0.50"
+    assert form["x.Chaddr"] == "AA:BB:CC:DD:EE:FF"
+
+
+def test_changing_a_reservation_edits_it_in_place():
+    router = StaticRouter([(7, "1", "192.168.0.158", "00:08:22:D1:BF:B9")])
+    static_client(router).set_static_ip("00:08:22:d1:bf:b9", "192.168.0.60")
+    assert router.rows == [[7, "1", "192.168.0.60", "00:08:22:D1:BF:B9"]]
+    assert router.writes[0][0] == "/html/bbsp/dhcpstatic/set.cgi"
+
+
+def test_repeating_a_reservation_writes_nothing():
+    router = StaticRouter([(1, "1", "192.168.0.158", "00:08:22:D1:BF:B9")])
+    static_client(router).set_static_ip("00:08:22:d1:bf:b9", "192.168.0.158")
+    assert router.writes == []
+
+
+def test_an_address_reserved_for_someone_else_is_refused_before_writing():
+    router = StaticRouter([(1, "1", "192.168.0.158", "00:08:22:D1:BF:B9")])
+    with pytest.raises(api.HuaweiOntError, match="already reserved"):
+        static_client(router).set_static_ip(
+            "aa:bb:cc:dd:ee:ff", "192.168.0.158"
+        )
+    assert router.writes == []
+
+
+def test_a_full_table_is_refused_before_writing():
+    rows = [(i, "1", f"192.168.0.{i + 10}", f"00:00:00:00:00:{i:02x}")
+            for i in range(1, api.MAX_STATIC_BINDINGS + 1)]
+    router = StaticRouter(rows)
+    with pytest.raises(api.HuaweiOntError, match="full"):
+        static_client(router).set_static_ip("aa:bb:cc:dd:ee:ff", "192.168.0.99")
+    assert router.writes == []
+
+
+def test_a_write_the_router_ignores_is_reported_not_trusted():
+    router = StaticRouter(accept=False)
+    with pytest.raises(api.HuaweiOntError, match="did not keep"):
+        static_client(router).set_static_ip("aa:bb:cc:dd:ee:ff", "192.168.0.50")
+
+
+def test_a_reservation_is_removed():
+    router = StaticRouter([
+        (1, "1", "192.168.0.158", "00:08:22:D1:BF:B9"),
+        (2, "1", "192.168.0.50", "AA:BB:CC:DD:EE:FF"),
+    ])
+    assert static_client(router).remove_static_ip("aa:bb:cc:dd:ee:ff") is True
+    assert [r[3] for r in router.rows] == ["00:08:22:D1:BF:B9"]
+    path, form = router.writes[0]
+    assert path == "/html/bbsp/dhcpstatic/del.cgi"
+    assert form[f"{BIND_DOMAIN}.2"] == ""
+
+
+def test_removing_a_missing_reservation_is_a_quiet_no_op():
+    router = StaticRouter()
+    assert static_client(router).remove_static_ip("aa:bb:cc:dd:ee:ff") is False
+    assert router.writes == []
+
+
+def test_a_delete_the_router_ignores_is_reported():
+    router = StaticRouter(
+        [(1, "1", "192.168.0.158", "00:08:22:D1:BF:B9")], accept=False
+    )
+    with pytest.raises(api.HuaweiOntError, match="did not remove"):
+        static_client(router).remove_static_ip("00:08:22:d1:bf:b9")

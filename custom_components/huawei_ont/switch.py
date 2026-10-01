@@ -12,7 +12,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import WifiNetwork
+from .api import ConnectedDevice, WifiNetwork
 from .const import DOMAIN
 from .coordinator import HuaweiOntCoordinator
 
@@ -43,6 +43,28 @@ async def async_setup_entry(
 
     _async_add_networks()
     entry.async_on_unload(coordinator.async_add_listener(_async_add_networks))
+
+    known_macs: set[str] = set()
+
+    @callback
+    def _async_add_static_ip_switches() -> None:
+        if not coordinator.data.device_list_valid:
+            return
+        new_entities = []
+        for device in coordinator.data.devices:
+            mac = device.mac_address.lower()
+            if mac not in known_macs:
+                known_macs.add(mac)
+                new_entities.append(
+                    HuaweiOntStaticIpSwitch(coordinator, device, entry)
+                )
+        if new_entities:
+            async_add_entities(new_entities)
+
+    _async_add_static_ip_switches()
+    entry.async_on_unload(
+        coordinator.async_add_listener(_async_add_static_ip_switches)
+    )
 
 
 class HuaweiOntWifiSwitch(
@@ -120,3 +142,62 @@ class HuaweiOntWifiSwitch(
 
     async def async_turn_off(self, **kwargs) -> None:
         await self._async_set(False)
+
+
+class HuaweiOntStaticIpSwitch(
+    CoordinatorEntity[HuaweiOntCoordinator], SwitchEntity
+):
+    """On while the router holds a DHCP reservation for this device.
+
+    Turning it on pins the address the device has right now; turning it off
+    releases the reservation. Disabled by default, because one exists per
+    device the router has seen and almost nobody wants them all.
+    """
+
+    _attr_has_entity_name = True
+    _attr_entity_registry_enabled_default = False
+    _attr_icon = "mdi:ip-network"
+
+    def __init__(
+        self,
+        coordinator: HuaweiOntCoordinator,
+        device: ConnectedDevice,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator)
+        self._mac = device.mac_address.lower()
+        self._attr_unique_id = f"{entry.entry_id}_static_ip_{self._mac}"
+        hostname = device.hostname
+        # the plain MAC, not oui.short_label: that reads a CSV from disk, which
+        # must not happen on the event loop
+        label = hostname if hostname and hostname != "--" else self._mac
+        self._attr_name = f"{label} static IP"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name=f"Huawei {coordinator.data.model}",
+            manufacturer="Huawei",
+            model=coordinator.data.model,
+        )
+
+    @property
+    def available(self) -> bool:
+        # unknown reservations must not read as "off"
+        return (
+            super().available
+            and self.coordinator.data.static_bindings is not None
+        )
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.reserved_ip(self._mac) is not None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str]:
+        ip = self.coordinator.reserved_ip(self._mac)
+        return {"reserved_ip": ip} if ip else {}
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.async_set_static_ip(self._mac)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.async_clear_static_ip(self._mac)

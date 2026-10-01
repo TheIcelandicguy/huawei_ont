@@ -5,10 +5,12 @@ patterns (new ClassName(...)) and single-quoted variables, not JSON.
 """
 
 import base64
+import ipaddress
 import logging
 import re
 import time
 from dataclasses import dataclass, field
+from urllib.parse import urlencode
 
 import requests
 import urllib3
@@ -56,6 +58,27 @@ URL_REBOOT_CGI = (
     "&RequestFile=html/ssmp/cfgfile/cfgfileroot.asp"
 )
 
+# DHCP static IP reservations ("DHCP Static IP" under Advanced > LAN). The page
+# lists them as `new stDhcp(domain, enable, ip, mac)` and the add/set/del
+# endpoints sit next to it; the router caps the table at 16 entries.
+DHCP_STATIC_DOMAIN = (
+    "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement"
+    ".DHCPStaticAddress"
+)
+URL_DHCP_STATIC = "/html/bbsp/dhcpstatic/dhcpstatic.asp"
+_DHCP_STATIC_RETURN = "&RequestFile=html/bbsp/dhcpstatic/dhcpstatic.asp"
+URL_DHCP_STATIC_ADD = (
+    f"/html/bbsp/dhcpstatic/add.cgi?x={DHCP_STATIC_DOMAIN}{_DHCP_STATIC_RETURN}"
+)
+URL_DHCP_STATIC_DEL = (
+    f"/html/bbsp/dhcpstatic/del.cgi?x={DHCP_STATIC_DOMAIN}{_DHCP_STATIC_RETURN}"
+)
+URL_DHCP_STATIC_SET = "/html/bbsp/dhcpstatic/set.cgi?x={domain}" + (
+    _DHCP_STATIC_RETURN
+)
+MAX_STATIC_BINDINGS = 16
+
+RE_MAC = re.compile(r'^([0-9a-f]{2}:){5}[0-9a-f]{2}$')
 RE_ONT_TOKEN = re.compile(
     r'(?:id|name)="onttoken"[^>]*value="([0-9a-fA-F]+)"'
 )
@@ -261,6 +284,43 @@ class WifiNetwork:
 
 
 @dataclass
+class StaticBinding:
+    """One DHCP reservation: the router always hands `mac` the address `ip`."""
+
+    domain: str
+    enabled: bool
+    ip: str
+    mac: str  # lower-case, colon-separated
+
+
+def normalize_mac(mac: str) -> str:
+    """Lower-case colon form of a MAC, or raise ValueError."""
+    out = mac.strip().lower().replace("-", ":")
+    if not RE_MAC.match(out):
+        raise ValueError(f"{mac!r} is not a MAC address")
+    return out
+
+
+def validate_static_ip(ip: str) -> str:
+    """Return `ip` if it can be reserved for a LAN host, else raise ValueError.
+
+    The subnet is not checked here: the router's own page does not know it
+    either, and the integration never reads the LAN mask.
+    """
+    try:
+        addr = ipaddress.IPv4Address(ip.strip())
+    except ValueError as err:
+        raise ValueError(f"{ip!r} is not an IPv4 address") from err
+    if (
+        addr.is_multicast or addr.is_loopback or addr.is_unspecified
+        or addr.is_reserved or addr.is_link_local
+        or addr == ipaddress.IPv4Address("255.255.255.255")
+    ):
+        raise ValueError(f"{addr} cannot be reserved for a host")
+    return str(addr)
+
+
+@dataclass
 class RouterData:
     cpu_usage: int = 0
     memory_usage: int = 0
@@ -292,6 +352,9 @@ class RouterData:
     # "nobody is connected" only when this is True; otherwise it means the
     # fetch failed and consumers must leave their existing state alone.
     device_list_valid: bool = False
+    # None until the reservation table is actually parsed, for the same reason
+    # as the counts above: unknown must not read as "no reservations"
+    static_bindings: list[StaticBinding] | None = None
     devices: list[ConnectedDevice] = field(default_factory=list)
     lan_ports: list[LanPort] = field(default_factory=list)
     wifi_networks: list[WifiNetwork] = field(default_factory=list)
@@ -341,6 +404,12 @@ _GE_DOMAIN = 0
 _GE_MODE = 1
 _GE_SPEED = 2
 _GE_STATUS = 3
+
+# stDhcp (DHCP static IP page)
+_SB_DOMAIN = 0
+_SB_ENABLE = 1
+_SB_IP = 2
+_SB_MAC = 3
 
 
 class HuaweiOntApi:
@@ -838,6 +907,130 @@ class HuaweiOntApi:
             _LOGGER.error("WiFi toggle error: %s", err)
             return False
 
+    @staticmethod
+    def _parse_static_bindings(html: str) -> list[StaticBinding] | None:
+        """Read the reservation table, or None if this isn't that page.
+
+        An empty table has no `stDhcp(...)` rows at all, so the `Dhcps` array
+        declaration is what tells "no reservations" from "wrong page".
+        """
+        if "var Dhcps" not in html:
+            return None
+        bindings = []
+        for args in _parse_constructors(html, "stDhcp"):
+            # (domain, Enable, ipAddress, macAddress)
+            if len(args) < 4:
+                continue
+            try:
+                mac = normalize_mac(args[_SB_MAC])
+            except ValueError:
+                continue
+            bindings.append(StaticBinding(
+                domain=args[_SB_DOMAIN],
+                enabled=args[_SB_ENABLE] == "1",
+                ip=args[_SB_IP],
+                mac=mac,
+            ))
+        return bindings
+
+    def _load_static_page(self) -> tuple[list[StaticBinding], str]:
+        """Current reservations plus the onttoken a write on that page needs."""
+        html = self._fetch_page(URL_DHCP_STATIC)
+        if not html:
+            raise HuaweiOntError("Could not load the DHCP Static IP page")
+        bindings = self._parse_static_bindings(html)
+        m = RE_ONT_TOKEN.search(html)
+        if bindings is None or not m:
+            raise HuaweiOntError(
+                "The DHCP Static IP page was not in the expected format"
+            )
+        return bindings, m.group(1)
+
+    def _write_static(self, build) -> list[StaticBinding]:
+        """Run one reservation write and return the table as the router has it.
+
+        `build(bindings, token)` returns (url, form fields), or None when
+        there is nothing to change. The token is bound to the login session, so
+        if the session moved under the write (`_post` returns None) the whole
+        read-token-write sequence runs once more on the fresh one. The result is
+        read back from the router rather than inferred from a 200: this page
+        answers 200 whether or not the change was accepted.
+        """
+        for _attempt in range(2):
+            bindings, token = self._load_static_page()
+            request = build(bindings, token)
+            if request is None:
+                return bindings
+            url, fields = request
+            if self._post(url, urlencode(fields), carries_token=True) is not None:
+                bindings, _token = self._load_static_page()
+                return bindings
+        raise HuaweiOntError("The router did not accept the change")
+
+    def set_static_ip(self, mac: str, ip: str) -> None:
+        """Reserve `ip` for `mac`, replacing any earlier reservation for it.
+
+        Takes effect when the device next renews or re-requests its lease.
+        Raises ValueError for bad input and HuaweiOntError for anything the
+        router refuses.
+        """
+        mac = normalize_mac(mac)
+        ip = validate_static_ip(ip)
+
+        def build(bindings, token):
+            current = next((b for b in bindings if b.mac == mac), None)
+            for b in bindings:
+                if b is not current and b.ip == ip:
+                    raise HuaweiOntError(
+                        f"{ip} is already reserved for {b.mac}"
+                    )
+            if current and current.ip == ip and current.enabled:
+                return None
+            fields = [("x.Yiaddr", ip), ("x.Chaddr", mac.upper())]
+            if current is None:
+                if len(bindings) >= MAX_STATIC_BINDINGS:
+                    raise HuaweiOntError(
+                        f"The router holds at most {MAX_STATIC_BINDINGS} "
+                        "reservations and the table is full"
+                    )
+                fields.append(("x.Enable", "1"))
+                url = URL_DHCP_STATIC_ADD
+            else:
+                if not current.enabled:
+                    fields.append(("x.Enable", "1"))
+                url = URL_DHCP_STATIC_SET.format(domain=current.domain)
+            fields.append(("x.X_HW_Token", token))
+            return url, fields
+
+        bindings = self._write_static(build)
+        if not any(b.mac == mac and b.ip == ip for b in bindings):
+            raise HuaweiOntError(
+                f"The router did not keep the reservation {mac} -> {ip}"
+            )
+        _LOGGER.info("Reserved %s for %s", ip, mac)
+
+    def remove_static_ip(self, mac: str) -> bool:
+        """Delete the reservation for `mac`. False if it had none."""
+        mac = normalize_mac(mac)
+        found = False
+
+        def build(bindings, token):
+            nonlocal found
+            current = next((b for b in bindings if b.mac == mac), None)
+            if current is None:
+                return None
+            found = True
+            return URL_DHCP_STATIC_DEL, [
+                (current.domain, ""), ("x.X_HW_Token", token),
+            ]
+
+        bindings = self._write_static(build)
+        if any(b.mac == mac for b in bindings):
+            raise HuaweiOntError(f"The router did not remove {mac}")
+        if found:
+            _LOGGER.info("Removed the reservation for %s", mac)
+        return found
+
     def _compute_rates(self, data: RouterData) -> None:
         """Derive throughput in Mbit/s from WAN byte counter deltas."""
         now = time.monotonic()
@@ -914,6 +1107,11 @@ class HuaweiOntApi:
         if wlan_html:
             fetched += 1
             self._parse_wlan_info(wlan_html, data)
+
+        static_html = self._fetch_page(URL_DHCP_STATIC)
+        if static_html:
+            fetched += 1
+            data.static_bindings = self._parse_static_bindings(static_html)
 
         if not fetched:
             raise HuaweiOntConnectionError(

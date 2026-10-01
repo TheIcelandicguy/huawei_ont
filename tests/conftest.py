@@ -27,7 +27,7 @@ try:
     HA_AVAILABLE = True
 except ImportError:
     HA_AVAILABLE = False
-    collect_ignore = ["test_device_tracker.py"]
+    collect_ignore = ["test_device_tracker.py", "test_static_ip.py"]
 
 
 def pytest_report_header(config):
