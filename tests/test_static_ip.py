@@ -9,6 +9,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
@@ -166,6 +167,8 @@ async def test_each_device_gets_a_switch_that_starts_disabled(
     )
     assert entity_id is not None
     assert reg.async_get(entity_id).disabled_by is er.RegistryEntryDisabler.INTEGRATION
+    # grouped under Configuration, not mixed in with the Wi-Fi switches
+    assert reg.async_get(entity_id).entity_category is EntityCategory.CONFIG
 
 
 async def test_the_services_go_away_with_the_last_entry(

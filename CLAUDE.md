@@ -128,7 +128,8 @@ live router after any firmware change.
 Surfaces: services `huawei_ont.set_static_ip` (entity_id or mac_address, optional
 ip_address — omitted pins the device's current address) and
 `huawei_ont.clear_static_ip`; a `static_ip` attribute on trackers; and one
-`switch` per device, **disabled by default** (`HuaweiOntStaticIpSwitch`, keyed
+`switch` per device, **disabled by default** and in `EntityCategory.CONFIG` so they get their own
+section on the device page (`HuaweiOntStaticIpSwitch`, keyed
 `<entry_id>_static_ip_<mac>`), on while a reservation exists.
 
 ## Entities

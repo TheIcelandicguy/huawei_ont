@@ -6,6 +6,7 @@ import logging
 
 from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import DeviceInfo
@@ -156,6 +157,9 @@ class HuaweiOntStaticIpSwitch(
 
     _attr_has_entity_name = True
     _attr_entity_registry_enabled_default = False
+    # own "Configuration" section on the device page, apart from the Wi-Fi
+    # switches under Controls
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_icon = "mdi:ip-network"
 
     def __init__(
