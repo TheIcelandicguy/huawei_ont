@@ -326,6 +326,11 @@ class HuaweiOntDeviceTracker(
 
     @property
     def name(self) -> str:
+        # a device Home Assistant already knows by MAC keeps the name it has
+        # there, which beats a DHCP hostname ("shellyplus1pm-b48a0a1d0fe4") or
+        # a vendor label
+        if known := self.coordinator.known_name(self._mac):
+            return known
         hostname = self._device.hostname
         if hostname and hostname != "--":
             return hostname

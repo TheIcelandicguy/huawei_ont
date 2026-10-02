@@ -25,7 +25,7 @@ custom_components/huawei_ont/
   sensor.py binary_sensor.py switch.py button.py device_tracker.py
   services.py + services.yaml   set_static_ip / clear_static_ip
   oui.py + oui_db.csv   offline IEEE OUI -> vendor; strings.json; translations/
-tests/  conftest.py, test_api.py (66), test_device_tracker.py (20), test_static_ip.py (14)
+tests/  conftest.py, test_api.py (66), test_device_tracker.py (20), test_static_ip.py (15)
 ```
 
 ## How it talks to the ONT (the non-obvious part)
@@ -137,6 +137,13 @@ history, so a switch exists only for a device that is online, holds a
 reservation, or whose switch the user enabled; the disabled leftovers of any
 other device are dropped on each poll (only while the list and the reservations
 are both known) and return with the device.
+
+Names: `coordinator.known_name(mac)` looks the MAC up in HA's device registry
+(`CONNECTION_NETWORK_MAC`, as ESPHome/Shelly/Hue register it) and the tracker
+and the switch show that name ahead of the DHCP hostname or vendor label. It is
+live, not written to the registry, so nothing gets pinned. Exact MACs only: a
+device whose Wi-Fi MAC differs from the one HA stores (some TVs) needs a manual
+rename.
 
 `sensor` *Free addresses* (on the same sub-device) counts the unused hosts of
 the router's /24 — assumed from the host address, the mask is never read — and

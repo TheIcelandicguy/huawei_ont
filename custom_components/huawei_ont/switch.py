@@ -209,12 +209,18 @@ class HuaweiOntStaticIpSwitch(
         hostname = device.hostname
         # the plain MAC, not oui.short_label: that reads a CSV from disk, which
         # must not happen on the event loop
-        label = hostname if hostname and hostname != "--" else self._mac
-        self._attr_name = f"{label} static IP"
+        self._fallback_label = (
+            hostname if hostname and hostname != "--" else self._mac
+        )
         # the sub-device is created in __init__.py, under the ONT
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"{entry.entry_id}_static_ip")},
         )
+
+    @property
+    def name(self) -> str:
+        label = self.coordinator.known_name(self._mac) or self._fallback_label
+        return f"{label} static IP"
 
     @property
     def available(self) -> bool:

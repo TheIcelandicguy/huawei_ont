@@ -6,6 +6,7 @@ from datetime import timedelta
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import HuaweiOntApi, HuaweiOntError, RouterData, normalize_mac
@@ -41,6 +42,21 @@ class HuaweiOntCoordinator(DataUpdateCoordinator[RouterData]):
             if binding.mac == mac.lower() and binding.enabled:
                 return binding.ip
         return None
+
+    def known_name(self, mac: str) -> str | None:
+        """The name Home Assistant already gives the device behind `mac`.
+
+        ESPHome, Shelly, Hue and the like register their MAC as a device
+        connection, so "Espressif 1fcc" can be shown as the "Kitchen oven circuit" the
+        user named it. Our own devices have no MAC connection, so this never
+        returns the ONT or the reservation sub-device.
+        """
+        device = dr.async_get(self.hass).async_get_device(
+            connections={(dr.CONNECTION_NETWORK_MAC, mac.lower())}
+        )
+        if device is None:
+            return None
+        return device.name_by_user or device.name
 
     def free_ips(self) -> list[str] | None:
         """Addresses on the router's /24 that nothing is using or has reserved.

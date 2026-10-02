@@ -15,6 +15,8 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from custom_components.huawei_ont.api import HuaweiOntError, StaticBinding
 from custom_components.huawei_ont.const import DOMAIN
 
@@ -214,6 +216,31 @@ async def test_the_services_go_away_with_the_last_entry(
     await hass.async_block_till_done()
 
     assert not hass.services.has_service(DOMAIN, "set_static_ip")
+
+
+async def test_a_device_home_assistant_knows_by_mac_gets_its_name(
+    hass: HomeAssistant, fake_api
+):
+    other = MockConfigEntry(domain="shelly")
+    other.add_to_hass(hass)
+    dr.async_get(hass).async_get_or_create(
+        config_entry_id=other.entry_id,
+        connections={(dr.CONNECTION_NETWORK_MAC, LAPTOP_MAC)},
+        name="Living room laptop",
+    )
+    entry = make_entry(hass)
+    await setup_entry(hass, entry)
+
+    tracker = tracker_entities(er.async_get(hass), entry.entry_id)[LAPTOP_MAC]
+    assert hass.states.get(tracker).attributes["friendly_name"].endswith(
+        "Living room laptop"
+    )
+    switch = er.async_get(hass).async_get_entity_id(
+        "switch", DOMAIN, f"{entry.entry_id}_static_ip_{LAPTOP_MAC}"
+    )
+    assert er.async_get(hass).async_get(switch).original_name == (
+        "Living room laptop static IP"
+    )
 
 
 OFFLINE_MAC = "a8:bb:cc:dd:ee:20"
