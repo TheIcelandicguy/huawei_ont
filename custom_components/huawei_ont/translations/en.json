@@ -66,6 +66,9 @@
       },
       "optical_voltage": {
         "name": "Supply voltage"
+      },
+      "free_ips": {
+        "name": "Free addresses"
       }
     },
     "binary_sensor": {

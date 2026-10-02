@@ -9,6 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -46,14 +47,38 @@ async def async_setup_entry(
     entry.async_on_unload(coordinator.async_add_listener(_async_add_networks))
 
     known_macs: set[str] = set()
+    prefix = f"{entry.entry_id}_static_ip_"
 
     @callback
     def _async_add_static_ip_switches() -> None:
-        if not coordinator.data.device_list_valid:
+        """Keep one switch per device that is online, reserved or opted in.
+
+        The router's list is its whole lease history, mostly devices that are
+        long gone. Only an online device, one holding a reservation (so it can
+        still be released) or one whose switch the user turned on gets an
+        entity; the disabled leftovers of everything else are dropped, and
+        come back when the device does.
+        """
+        data = coordinator.data
+        if not data.device_list_valid or data.static_bindings is None:
             return
-        new_entities = []
-        for device in coordinator.data.devices:
+        reg = er.async_get(hass)
+
+        def wanted(device: ConnectedDevice) -> bool:
             mac = device.mac_address.lower()
+            if device.status == "Online" or coordinator.reserved_ip(mac):
+                return True
+            entity_id = reg.async_get_entity_id("switch", DOMAIN, prefix + mac)
+            reg_entry = reg.async_get(entity_id) if entity_id else None
+            return bool(reg_entry and reg_entry.disabled_by is None)
+
+        wanted_macs: set[str] = set()
+        new_entities = []
+        for device in data.devices:
+            if not wanted(device):
+                continue
+            mac = device.mac_address.lower()
+            wanted_macs.add(mac)
             if mac not in known_macs:
                 known_macs.add(mac)
                 new_entities.append(
@@ -61,6 +86,18 @@ async def async_setup_entry(
                 )
         if new_entities:
             async_add_entities(new_entities)
+
+        for reg_entry in er.async_entries_for_config_entry(reg, entry.entry_id):
+            if (
+                reg_entry.domain != "switch"
+                or not reg_entry.unique_id.startswith(prefix)
+                or reg_entry.disabled_by is not er.RegistryEntryDisabler.INTEGRATION
+            ):
+                continue
+            mac = reg_entry.unique_id[len(prefix):]
+            if mac not in wanted_macs:
+                reg.async_remove(reg_entry.entity_id)
+                known_macs.discard(mac)
 
     _async_add_static_ip_switches()
     entry.async_on_unload(
@@ -193,8 +230,12 @@ class HuaweiOntStaticIpSwitch(
 
     @property
     def extra_state_attributes(self) -> dict[str, str]:
-        ip = self.coordinator.reserved_ip(self._mac)
-        return {"reserved_ip": ip} if ip else {}
+        attrs = {}
+        if current := self.coordinator.current_ip(self._mac):
+            attrs["current_ip"] = current
+        if reserved := self.coordinator.reserved_ip(self._mac):
+            attrs["reserved_ip"] = reserved
+        return attrs
 
     async def async_turn_on(self, **kwargs) -> None:
         await self.coordinator.async_set_static_ip(self._mac)

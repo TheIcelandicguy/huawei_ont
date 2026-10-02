@@ -1,5 +1,6 @@
 """Data update coordinator for Huawei ONT."""
 
+import ipaddress
 import logging
 from datetime import timedelta
 
@@ -40,6 +41,27 @@ class HuaweiOntCoordinator(DataUpdateCoordinator[RouterData]):
             if binding.mac == mac.lower() and binding.enabled:
                 return binding.ip
         return None
+
+    def free_ips(self) -> list[str] | None:
+        """Addresses on the router's /24 that nothing is using or has reserved.
+
+        "Used" covers every row of the router's list, offline ones included:
+        that list is the whole lease history, and an address an offline device
+        held a week ago is the one most likely to be handed back to it. The /24
+        is assumed from the router's own address, since the integration never
+        reads the LAN mask. None while the list or the reservations are
+        unknown, so a failed poll never reads as "everything is free".
+        """
+        if not self.data.device_list_valid or self.data.static_bindings is None:
+            return None
+        try:
+            network = ipaddress.ip_network(f"{self.api.host}/24", strict=False)
+        except ValueError:
+            return None  # the host is a name, not an address
+        used = {self.api.host}
+        used.update(d.ip_address for d in self.data.devices)
+        used.update(b.ip for b in self.data.static_bindings)
+        return [str(a) for a in network.hosts() if str(a) not in used]
 
     def holder_of(self, ip: str, mac: str) -> str | None:
         """Name of an online device other than `mac` that holds `ip` now."""

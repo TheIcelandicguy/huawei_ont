@@ -177,6 +177,7 @@ async def async_setup_entry(
         HuaweiOntSensor(coordinator, description, entry)
         for description in SENSOR_DESCRIPTIONS
     )
+    async_add_entities([HuaweiOntFreeIpsSensor(coordinator, entry)])
 
 
 class HuaweiOntSensor(CoordinatorEntity[HuaweiOntCoordinator], SensorEntity):
@@ -206,3 +207,34 @@ class HuaweiOntSensor(CoordinatorEntity[HuaweiOntCoordinator], SensorEntity):
     @property
     def native_value(self) -> int | float | str | None:
         return self.entity_description.value_fn(self.coordinator.data)
+
+
+class HuaweiOntFreeIpsSensor(
+    CoordinatorEntity[HuaweiOntCoordinator], SensorEntity
+):
+    """How many LAN addresses are free, with the addresses as an attribute."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "free_ips"
+    _attr_icon = "mdi:ip-network-outline"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    # up to ~250 strings: useful on the card, pointless as recorder history
+    _unrecorded_attributes = frozenset({"addresses"})
+
+    def __init__(
+        self, coordinator: HuaweiOntCoordinator, entry: ConfigEntry
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_free_ips"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"{entry.entry_id}_static_ip")},
+        )
+
+    @property
+    def native_value(self) -> int | None:
+        free = self.coordinator.free_ips()
+        return None if free is None else len(free)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, list[str]]:
+        return {"addresses": self.coordinator.free_ips() or []}

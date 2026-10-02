@@ -434,6 +434,10 @@ class HuaweiOntApi:
         # token-bearing sequence can tell that the session moved under it
         self._auth_generation = 0
 
+    @property
+    def host(self) -> str:
+        return self._host
+
     def _ensure_session(self) -> requests.Session:
         if self._session is None:
             self._session = requests.Session()

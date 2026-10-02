@@ -90,9 +90,15 @@ Assistant:
   optional `ip_address`. Leave the address out to pin the one the device has
   now.
 - `huawei_ont.clear_static_ip` releases it.
-- Each device also has a **Static IP** switch (disabled by default — enable the
-  ones you want). Turning it on pins the current address; off releases it.
-  Trackers show the reserved address as `static_ip`.
+- Each device also has a **Static IP** switch on the *Static IP reservations*
+  device (disabled by default — enable the ones you want). Only devices that are
+  online, or already reserved, get one. Turning it on pins the current address;
+  off releases it. It shows `current_ip` and `reserved_ip`, and trackers show
+  the reserved address as `static_ip`.
+- The **Free addresses** sensor on the same device counts the unused addresses
+  on your /24 and lists them in its `addresses` attribute, to pick one from.
+- An address another device is using right now is refused, since that device
+  keeps it until its lease runs out; pass `force: true` to reserve it anyway.
 
 A reservation applies when the device next renews its lease or reconnects. The
 router holds at most 16.

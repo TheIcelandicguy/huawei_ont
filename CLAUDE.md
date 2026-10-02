@@ -25,7 +25,7 @@ custom_components/huawei_ont/
   sensor.py binary_sensor.py switch.py button.py device_tracker.py
   services.py + services.yaml   set_static_ip / clear_static_ip
   oui.py + oui_db.csv   offline IEEE OUI -> vendor; strings.json; translations/
-tests/  conftest.py, test_api.py (66), test_device_tracker.py (20), test_static_ip.py (9)
+tests/  conftest.py, test_api.py (66), test_device_tracker.py (20), test_static_ip.py (14)
 ```
 
 ## How it talks to the ONT (the non-obvious part)
@@ -131,7 +131,17 @@ ip_address — omitted pins the device's current address) and
 `switch` per device, **disabled by default**, in `EntityCategory.CONFIG`, on a
 sub-device "Static IP reservations" (`via_device_id` the ONT, falling back to `via_device` on older HA; `__init__.py` creates
 the ONT's device first so the link never dangles). `HuaweiOntStaticIpSwitch`,
-keyed `<entry_id>_static_ip_<mac>`, on while a reservation exists.
+keyed `<entry_id>_static_ip_<mac>`, on while a reservation exists, with
+`current_ip` / `reserved_ip` attributes. The router's list is its whole lease
+history, so a switch exists only for a device that is online, holds a
+reservation, or whose switch the user enabled; the disabled leftovers of any
+other device are dropped on each poll (only while the list and the reservations
+are both known) and return with the device.
+
+`sensor` *Free addresses* (on the same sub-device) counts the unused hosts of
+the router's /24 — assumed from the host address, the mask is never read — and
+lists them in an `addresses` attribute (unrecorded). "Used" includes every row
+of the lease history, offline ones too, the router itself and all reservations.
 
 The router checks a new address only against other *reservations*, so
 `async_set_static_ip` first refuses an address an online device holds right now

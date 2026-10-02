@@ -87,6 +87,7 @@ class FakeApi:
         self.data = router_data()
         self.error: Exception | None = None
         self.polls = 0
+        self.host = "192.168.0.1"
 
     def get_router_data(self) -> RouterData:
         self.polls += 1
