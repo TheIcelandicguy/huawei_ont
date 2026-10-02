@@ -51,10 +51,13 @@ class HuaweiOntCoordinator(DataUpdateCoordinator[RouterData]):
         user named it. Our own devices have no MAC connection, so this never
         returns the ONT or the reservation sub-device.
         """
-        # a scan rather than async_get_device, which Home Assistant deprecates
-        # in favour of lookups that do not exist on older versions
+        # A scan rather than async_get_device, which Home Assistant deprecates
+        # in favour of lookups that do not exist on older versions. Iterating
+        # the registry yields entries on current Home Assistant and ids on old.
         connection = (dr.CONNECTION_NETWORK_MAC, mac.lower())
-        for device in dr.async_get(self.hass).devices.values():
+        devices = dr.async_get(self.hass).devices
+        for item in devices:
+            device = item if hasattr(item, "connections") else devices[item]
             if connection in device.connections:
                 return device.name_by_user or device.name
         return None
