@@ -21,10 +21,11 @@ will likely work in part; results will vary by firmware.
 
 | Type | Entities |
 |------|----------|
-| **Sensors** | CPU usage, memory usage, WAN IP, WAN uptime, download/upload rate (Mbit/s), connected / Wi-Fi / LAN client counts, board temperature, supply voltage, bytes & packets sent/received (disabled by default) |
+| **Sensors** | CPU usage, memory usage, WAN IP, WAN uptime, download/upload rate (Mbit/s), connected / Wi-Fi / LAN client counts, board temperature, supply voltage, free LAN addresses, bytes & packets sent/received (disabled by default) |
 | **Binary sensors** | WAN connection, ONT status, LAN1–4 link (with speed & duplex attributes) |
-| **Switches** | Per-SSID Wi-Fi on/off — main **and** guest networks, 2.4 GHz & 5 GHz |
+| **Switches** | Per-SSID Wi-Fi on/off — main **and** guest networks, 2.4 GHz & 5 GHz; plus an optional **Static IP** switch per device (see below) |
 | **Button** | Reboot the router |
+| **Services** | `set_static_ip`, `clear_static_ip` — DHCP reservations on the router |
 | **Device trackers** | One per connected device, live "only-online" list with automatic pruning and MAC-vendor labelling |
 
 ### Device trackers — only-online mode
@@ -83,8 +84,9 @@ only ever sees that router's own address.
 
 ### Static IP reservations
 
-The router's DHCP server can always hand a device the same address. From Home
-Assistant:
+The router's DHCP server can always hand a device the same address. The
+switches and the *Free addresses* sensor live on their own **Static IP
+reservations** device, under the router. From Home Assistant:
 
 - `huawei_ont.set_static_ip` with a device tracker (or a `mac_address`) and an
   optional `ip_address`. Leave the address out to pin the one the device has
@@ -103,6 +105,22 @@ Assistant:
 A reservation applies when the device next renews its lease or reconnects. The
 router holds at most 16.
 
+### Device names
+
+A tracker (and its Static IP switch) is named, in order of preference:
+
+1. a name you gave it by renaming the tracker,
+2. **the name Home Assistant already has for that device**, matched by MAC
+   address. ESPHome, Shelly, Hue and similar integrations register their MAC with
+   Home Assistant, so a device shows as `Kitchen oven circuit` instead of
+   `Espressif 1fcc`. This is looked up live from your own device registry — nothing
+   is fetched from outside and nothing is renamed or pinned,
+3. the DHCP hostname the device announces,
+4. a manufacturer label such as `Canon 3e24`.
+
+Only an exact MAC match counts. A device whose Wi-Fi MAC differs slightly from the
+one its own integration stores (some TVs) keeps its hostname until you rename it.
+
 ### Names and non-ASCII characters
 
 SSIDs are read as UTF-8, so a network called `Ásgarður` or `Þórsheimili` shows
@@ -116,7 +134,8 @@ transliterate before sending: a phone named `Sigríður-sími` announces itself 
 `Sigridur-simi`, and `Þórður's S25 Ultra` arrives as `THordur-s-S25-Ultra`.
 The accented form never reaches the router, so it cannot be recovered here —
 rename the tracker in Home Assistant if you want the correct spelling (which
-also pins it, see above).
+also pins it, see above). A device that Home Assistant already knows by MAC gets
+its Home Assistant name instead, accents included — see *Device names*.
 
 ### Vendor labelling
 

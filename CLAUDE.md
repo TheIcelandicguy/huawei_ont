@@ -1,7 +1,7 @@
 # CLAUDE.md — huawei_ont
 
 Home Assistant custom integration for **Huawei OptiXstar** ONTs. Domain
-`huawei_ont`, **v1.1.0** (`custom_components/huawei_ont/manifest.json`),
+`huawei_ont`, **v1.2.0** (`custom_components/huawei_ont/manifest.json`),
 `integration_type: hub`, `iot_class: local_polling`, `requirements: []` — no
 third-party deps; `api.py` uses only `requests`, which HA already ships. Repo
 `TheIcelandicguy/huawei_ont`, branch `main`; HACS custom repo, min HA `2024.1.0`.
