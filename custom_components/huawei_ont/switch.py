@@ -174,13 +174,9 @@ class HuaweiOntStaticIpSwitch(
         # must not happen on the event loop
         label = hostname if hostname and hostname != "--" else self._mac
         self._attr_name = f"{label} static IP"
-        # a sub-device of the ONT, so the reservations get their own page
+        # the sub-device is created in __init__.py, under the ONT
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"{entry.entry_id}_static_ip")},
-            name="Static IP reservations",
-            manufacturer="Huawei",
-            model=coordinator.data.model,
-            via_device=(DOMAIN, entry.entry_id),
         )
 
     @property

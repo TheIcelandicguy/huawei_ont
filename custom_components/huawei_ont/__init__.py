@@ -35,15 +35,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
-    # the Static IP sub-device points at this one via_device, so it must exist
-    # before the platforms race to create it
-    dr.async_get(hass).async_get_or_create(
+    # The Static IP switches live on a sub-device of the ONT. Both devices are
+    # made here, parent first, because a DeviceInfo on an entity can only name
+    # its parent with the deprecated `via_device`.
+    devices = dr.async_get(hass)
+    hub = devices.async_get_or_create(
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, entry.entry_id)},
         name=f"Huawei {coordinator.data.model}",
         manufacturer="Huawei",
         model=coordinator.data.model,
     )
+    sub_device = dict(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, f"{entry.entry_id}_static_ip")},
+        name="Static IP reservations",
+        manufacturer="Huawei",
+        model=coordinator.data.model,
+    )
+    try:
+        devices.async_get_or_create(**sub_device, via_device_id=hub.id)
+    except TypeError:
+        # Home Assistant before via_device_id existed
+        devices.async_get_or_create(
+            **sub_device, via_device=(DOMAIN, entry.entry_id)
+        )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     async_register_services(hass)
 

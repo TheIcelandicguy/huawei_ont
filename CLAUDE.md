@@ -129,7 +129,7 @@ Surfaces: services `huawei_ont.set_static_ip` (entity_id or mac_address, optiona
 ip_address — omitted pins the device's current address) and
 `huawei_ont.clear_static_ip`; a `static_ip` attribute on trackers; and one
 `switch` per device, **disabled by default**, in `EntityCategory.CONFIG`, on a
-sub-device "Static IP reservations" (`via_device` the ONT; `__init__.py` creates
+sub-device "Static IP reservations" (`via_device_id` the ONT, falling back to `via_device` on older HA; `__init__.py` creates
 the ONT's device first so the link never dangles). `HuaweiOntStaticIpSwitch`,
 keyed `<entry_id>_static_ip_<mac>`, on while a reservation exists.
 
