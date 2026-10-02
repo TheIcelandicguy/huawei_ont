@@ -4,6 +4,7 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 
 from .api import HuaweiOntApi
 from .const import (
@@ -34,6 +35,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    # the Static IP sub-device points at this one via_device, so it must exist
+    # before the platforms race to create it
+    dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, entry.entry_id)},
+        name=f"Huawei {coordinator.data.model}",
+        manufacturer="Huawei",
+        model=coordinator.data.model,
+    )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     async_register_services(hass)
 

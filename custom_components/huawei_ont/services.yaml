@@ -13,6 +13,10 @@ set_static_ip:
       example: "192.168.0.50"
       selector:
         text:
+    force:
+      default: false
+      selector:
+        boolean:
 
 clear_static_ip:
   fields:

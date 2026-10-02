@@ -17,13 +17,18 @@ SERVICE_SET_STATIC_IP = "set_static_ip"
 SERVICE_CLEAR_STATIC_IP = "clear_static_ip"
 ATTR_MAC_ADDRESS = "mac_address"
 ATTR_IP_ADDRESS = "ip_address"
+ATTR_FORCE = "force"
 
 _TARGET = {
     vol.Exclusive(ATTR_ENTITY_ID, "target"): cv.entity_id,
     vol.Exclusive(ATTR_MAC_ADDRESS, "target"): cv.string,
 }
 SET_SCHEMA = vol.All(
-    vol.Schema({**_TARGET, vol.Optional(ATTR_IP_ADDRESS): cv.string}),
+    vol.Schema({
+        **_TARGET,
+        vol.Optional(ATTR_IP_ADDRESS): cv.string,
+        vol.Optional(ATTR_FORCE, default=False): cv.boolean,
+    }),
     cv.has_at_least_one_key(ATTR_ENTITY_ID, ATTR_MAC_ADDRESS),
 )
 CLEAR_SCHEMA = vol.All(
@@ -63,7 +68,9 @@ def async_register_services(hass: HomeAssistant) -> None:
 
     async def _set(call: ServiceCall) -> None:
         await _coordinator(hass).async_set_static_ip(
-            _target_mac(hass, call), call.data.get(ATTR_IP_ADDRESS)
+            _target_mac(hass, call),
+            call.data.get(ATTR_IP_ADDRESS),
+            call.data[ATTR_FORCE],
         )
 
     async def _clear(call: ServiceCall) -> None:

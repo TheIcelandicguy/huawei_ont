@@ -157,8 +157,6 @@ class HuaweiOntStaticIpSwitch(
 
     _attr_has_entity_name = True
     _attr_entity_registry_enabled_default = False
-    # own "Configuration" section on the device page, apart from the Wi-Fi
-    # switches under Controls
     _attr_entity_category = EntityCategory.CONFIG
     _attr_icon = "mdi:ip-network"
 
@@ -176,11 +174,13 @@ class HuaweiOntStaticIpSwitch(
         # must not happen on the event loop
         label = hostname if hostname and hostname != "--" else self._mac
         self._attr_name = f"{label} static IP"
+        # a sub-device of the ONT, so the reservations get their own page
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name=f"Huawei {coordinator.data.model}",
+            identifiers={(DOMAIN, f"{entry.entry_id}_static_ip")},
+            name="Static IP reservations",
             manufacturer="Huawei",
             model=coordinator.data.model,
+            via_device=(DOMAIN, entry.entry_id),
         )
 
     @property

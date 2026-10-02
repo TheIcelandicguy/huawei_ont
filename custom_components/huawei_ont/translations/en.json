@@ -98,6 +98,10 @@
         "ip_address": {
           "name": "IP address",
           "description": "The address to reserve. Leave empty to pin the address the device has now."
+        },
+        "force": {
+          "name": "Force",
+          "description": "Reserve the address even though another device is using it right now. That device keeps it until its lease runs out."
         }
       }
     },

@@ -12,6 +12,7 @@ import pytest
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.huawei_ont.api import HuaweiOntError, StaticBinding
@@ -102,6 +103,30 @@ async def test_pinning_a_device_the_router_does_not_list_needs_an_address(
     assert fake_api.calls == []
 
 
+async def test_an_address_another_device_is_using_is_refused_unless_forced(
+    hass: HomeAssistant, fake_api
+):
+    await setup_entry(hass, make_entry(hass))
+    other = "aa:bb:cc:dd:ee:ff"
+
+    with pytest.raises(HomeAssistantError, match="in use right now by laptop"):
+        await hass.services.async_call(
+            DOMAIN,
+            "set_static_ip",
+            {"mac_address": other, "ip_address": "192.168.0.42"},
+            blocking=True,
+        )
+    assert fake_api.calls == []
+
+    await hass.services.async_call(
+        DOMAIN,
+        "set_static_ip",
+        {"mac_address": other, "ip_address": "192.168.0.42", "force": True},
+        blocking=True,
+    )
+    assert fake_api.calls == [("set", other, "192.168.0.42")]
+
+
 async def test_a_router_refusal_surfaces_as_a_service_error(
     hass: HomeAssistant, fake_api
 ):
@@ -169,6 +194,13 @@ async def test_each_device_gets_a_switch_that_starts_disabled(
     assert reg.async_get(entity_id).disabled_by is er.RegistryEntryDisabler.INTEGRATION
     # grouped under Configuration, not mixed in with the Wi-Fi switches
     assert reg.async_get(entity_id).entity_category is EntityCategory.CONFIG
+
+    # on a sub-device of the ONT, not the ONT itself
+    devices = dr.async_get(hass)
+    sub = devices.async_get(reg.async_get(entity_id).device_id)
+    hub = devices.async_get_device({(DOMAIN, entry.entry_id)})
+    assert sub.name == "Static IP reservations"
+    assert sub.via_device_id == hub.id
 
 
 async def test_the_services_go_away_with_the_last_entry(

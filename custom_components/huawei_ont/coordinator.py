@@ -41,8 +41,30 @@ class HuaweiOntCoordinator(DataUpdateCoordinator[RouterData]):
                 return binding.ip
         return None
 
-    async def async_set_static_ip(self, mac: str, ip: str | None = None) -> None:
-        """Reserve `ip` for `mac`; with no `ip`, pin the address it has now."""
+    def holder_of(self, ip: str, mac: str) -> str | None:
+        """Name of an online device other than `mac` that holds `ip` now."""
+        for device in self.data.devices:
+            if (
+                device.ip_address == ip
+                and device.status == "Online"
+                and device.mac_address.lower() != mac.lower()
+            ):
+                name = device.hostname
+                if not name or name == "--":
+                    name = device.mac_address.lower()
+                return name
+        return None
+
+    async def async_set_static_ip(
+        self, mac: str, ip: str | None = None, force: bool = False
+    ) -> None:
+        """Reserve `ip` for `mac`; with no `ip`, pin the address it has now.
+
+        The router only checks the new address against other *reservations*.
+        A device that already holds it on a dynamic lease keeps it until that
+        lease runs out, so two devices would share the address meanwhile. Say
+        so up front unless the caller insists with `force`.
+        """
         try:
             mac = normalize_mac(mac)
             if ip is None:
@@ -52,6 +74,12 @@ class HuaweiOntCoordinator(DataUpdateCoordinator[RouterData]):
                         f"{mac} is not on the router's device list, so there "
                         "is no current address to pin — pass ip_address"
                     )
+            elif not force and (holder := self.holder_of(ip, mac)):
+                raise ValueError(
+                    f"{ip} is in use right now by {holder}. Reconnect or "
+                    "restart that device first so it takes another address, "
+                    "or pass force to reserve it anyway"
+                )
             await self.hass.async_add_executor_job(
                 self.api.set_static_ip, mac, ip
             )
