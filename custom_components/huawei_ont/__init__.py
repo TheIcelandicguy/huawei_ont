@@ -11,8 +11,10 @@ from .const import (
     CONF_HOST,
     CONF_PASSWORD,
     CONF_SCAN_INTERVAL,
+    CONF_USE_HTTPS,
     CONF_USERNAME,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_USE_HTTPS,
     DOMAIN,
     PLATFORMS,
 )
@@ -27,6 +29,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         host=entry.data[CONF_HOST],
         username=entry.data[CONF_USERNAME],
         password=entry.data[CONF_PASSWORD],
+        use_https=entry.data.get(CONF_USE_HTTPS, DEFAULT_USE_HTTPS),
     )
 
     scan_interval = entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)

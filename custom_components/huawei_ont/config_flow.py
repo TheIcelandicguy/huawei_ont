@@ -12,9 +12,11 @@ from .const import (
     CONF_HOST,
     CONF_PASSWORD,
     CONF_SCAN_INTERVAL,
+    CONF_USE_HTTPS,
     CONF_USERNAME,
     DEFAULT_HOST,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_USE_HTTPS,
     DEFAULT_USERNAME,
     DOMAIN,
 )
@@ -27,6 +29,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_USERNAME, default=DEFAULT_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
         vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): int,
+        vol.Optional(CONF_USE_HTTPS, default=DEFAULT_USE_HTTPS): bool,
     }
 )
 
@@ -44,6 +47,7 @@ class HuaweiOntConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 host=user_input[CONF_HOST],
                 username=user_input[CONF_USERNAME],
                 password=user_input[CONF_PASSWORD],
+                use_https=user_input[CONF_USE_HTTPS],
             )
             try:
                 result = await self.hass.async_add_executor_job(

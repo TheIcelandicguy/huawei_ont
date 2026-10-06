@@ -1,7 +1,7 @@
 # CLAUDE.md — huawei_ont
 
 Home Assistant custom integration for **Huawei OptiXstar** ONTs. Domain
-`huawei_ont`, **v1.2.0** (`custom_components/huawei_ont/manifest.json`),
+`huawei_ont`, **v1.3.0** (`custom_components/huawei_ont/manifest.json`),
 `integration_type: hub`, `iot_class: local_polling`, `requirements: []` — no
 third-party deps; `api.py` uses only `requests`, which HA already ships. Repo
 `TheIcelandicguy/huawei_ont`, branch `main`; HACS custom repo, min HA `2024.1.0`.
@@ -25,13 +25,14 @@ custom_components/huawei_ont/
   sensor.py binary_sensor.py switch.py button.py device_tracker.py
   services.py + services.yaml   set_static_ip / clear_static_ip
   oui.py + oui_db.csv   offline IEEE OUI -> vendor; strings.json; translations/
-tests/  conftest.py, test_api.py (66), test_device_tracker.py (20), test_static_ip.py (15)
+tests/  conftest.py, test_api.py (67), test_device_tracker.py (20), test_static_ip.py (15)
 ```
 
 ## How it talks to the ONT (the non-obvious part)
 
 No SNMP, no TR-069, no JSON API — it drives the router's own web UI over HTTPS
-with a self-signed cert (`verify=False`) and scrapes `.asp` pages.
+with a self-signed cert (`verify=False`; the `use_https` config key, default
+true, switches to plain `http://` for firmwares like the V564 that serve only that) and scrapes `.asp` pages.
 
 **Login** (`HuaweiOntApi.authenticate`): `POST /asp/GetRandCount.asp` for a nonce
 (raw text, BOM to strip), then `POST /login.cgi` with `UserName`, `PassWord` =
@@ -255,7 +256,7 @@ error instead of a hang; if the copy fails on a lock, restart HA and re-run.
   the change.
 - **One admin session.** A browser login to the ONT web UI fights the
   integration for it; each side steals it back. Disable the integration first.
-- **No options flow.** Host, credentials and scan interval are settable only at
+- **No options flow.** Host, credentials, scan interval and the HTTPS box are settable only at
   setup — changing one means deleting and re-adding the entry; `unique_id` is the
   host, so re-adding the same IP aborts as `already_configured`.
 - **Positional constructor indices are fragile.** A firmware change that adds or

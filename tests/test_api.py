@@ -963,3 +963,11 @@ def test_a_delete_the_router_ignores_is_reported():
     )
     with pytest.raises(api.HuaweiOntError, match="did not remove"):
         static_client(router).remove_static_ip("00:08:22:d1:bf:b9")
+
+
+def test_http_scheme_option():
+    assert api.HuaweiOntApi(HOST, "u", "p")._base_url == f"https://{HOST}"
+    assert (
+        api.HuaweiOntApi(HOST, "u", "p", use_https=False)._base_url
+        == f"http://{HOST}"
+    )

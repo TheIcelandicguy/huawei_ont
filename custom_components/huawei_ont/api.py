@@ -415,11 +415,19 @@ _SB_MAC = 3
 class HuaweiOntApi:
     """API client for Huawei OptiXstar ONT."""
 
-    def __init__(self, host: str, username: str, password: str) -> None:
+    def __init__(
+        self,
+        host: str,
+        username: str,
+        password: str,
+        use_https: bool = True,
+    ) -> None:
         self._host = host
         self._username = username
         self._password = password
-        self._base_url = f"https://{host}"
+        # some firmwares (e.g. V564) serve the admin UI over plain http only
+        scheme = "https" if use_https else "http"
+        self._base_url = f"{scheme}://{host}"
         self._session: requests.Session | None = None
         self._authenticated = False
         # (monotonic timestamp, bytes_sent, bytes_received) from last poll,

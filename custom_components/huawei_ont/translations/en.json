@@ -8,7 +8,8 @@
           "host": "Host",
           "username": "Username",
           "password": "Password",
-          "scan_interval": "Scan interval (seconds)"
+          "scan_interval": "Scan interval (seconds)",
+          "use_https": "Use HTTPS (untick if the router only serves http://)"
         }
       }
     },

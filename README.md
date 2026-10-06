@@ -169,6 +169,7 @@ enter:
 | Username | `admin` | Router admin account |
 | Password | — | Router admin password |
 | Scan interval | `30` | Seconds between polls |
+| Use HTTPS | on | Untick if the router only serves `http://` (some, e.g. the V564, do) |
 
 ## Important notes
 
