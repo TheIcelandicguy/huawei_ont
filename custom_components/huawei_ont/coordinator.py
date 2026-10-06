@@ -14,6 +14,9 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
+# consecutive failed polls absorbed before entities go unavailable
+TOLERATED_MISSES = 1
+
 
 class HuaweiOntCoordinator(DataUpdateCoordinator[RouterData]):
     """Coordinator to manage fetching data from the router."""
@@ -28,6 +31,7 @@ class HuaweiOntCoordinator(DataUpdateCoordinator[RouterData]):
             update_interval=timedelta(seconds=scan_interval),
         )
         self.api = api
+        self._failed_polls = 0
 
     def current_ip(self, mac: str) -> str | None:
         """The IPv4 address the router last showed for `mac`, if any."""
@@ -142,8 +146,17 @@ class HuaweiOntCoordinator(DataUpdateCoordinator[RouterData]):
 
     async def _async_update_data(self) -> RouterData:
         try:
-            return await self.hass.async_add_executor_job(
+            data = await self.hass.async_add_executor_job(
                 self.api.get_router_data
             )
         except Exception as err:
+            self._failed_polls += 1
+            # The ONT drops a session now and then and recovers on the next
+            # poll. Let one miss pass with the last good data rather than
+            # flipping every entity to unavailable; a second in a row is real.
+            if self.data is not None and self._failed_polls <= TOLERATED_MISSES:
+                _LOGGER.debug("Poll failed, keeping previous data: %s", err)
+                return self.data
             raise UpdateFailed(f"Error fetching router data: {err}") from err
+        self._failed_polls = 0
+        return data

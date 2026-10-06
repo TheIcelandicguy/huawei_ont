@@ -971,3 +971,47 @@ def test_http_scheme_option():
         api.HuaweiOntApi(HOST, "u", "p", use_https=False)._base_url
         == f"http://{HOST}"
     )
+
+
+def test_login_retries_once_on_a_fresh_connection_after_a_dead_socket(
+    monkeypatch,
+):
+    """RemoteDisconnected on a stale keep-alive socket is not a login failure."""
+    import requests
+
+    clock = FakeClock()
+    calls = {"n": 0}
+
+    def handler(session, method, path, data):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise requests.ConnectionError("Remote end closed connection")
+        return login_response(session, path)
+
+    monkeypatch.setattr(requests, "Session", lambda: FakeSession(handler))
+    client = make_client(handler, clock, monkeypatch)
+    assert client.authenticate()
+    assert clock.slept == api.LOGIN_RETRY_DELAY
+    assert client._auth_blocked_until == 0.0
+
+
+def test_login_gives_up_and_backs_off_after_two_dead_sockets(monkeypatch):
+    import requests
+
+    clock = FakeClock()
+
+    def handler(session, method, path, data):
+        raise requests.ConnectionError("Remote end closed connection")
+
+    monkeypatch.setattr(requests, "Session", lambda: FakeSession(handler))
+    client = make_client(handler, clock, monkeypatch)
+    assert not client.authenticate()
+    assert client._auth_blocked_until > clock.monotonic()
+    # blocked: no further attempt until the backoff has passed
+    assert not client.authenticate()
+
+
+def test_a_rejected_login_is_not_retried():
+    client = make_client(lambda s, m, p, d: login_response(s, p, ok=False))
+    assert not client.authenticate()
+    assert client._session.paths("POST").count(api.URL_LOGIN) == 1

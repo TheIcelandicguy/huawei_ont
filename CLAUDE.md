@@ -1,7 +1,7 @@
 # CLAUDE.md — huawei_ont
 
 Home Assistant custom integration for **Huawei OptiXstar** ONTs. Domain
-`huawei_ont`, **v1.3.0** (`custom_components/huawei_ont/manifest.json`),
+`huawei_ont`, **v1.3.1** (`custom_components/huawei_ont/manifest.json`),
 `integration_type: hub`, `iot_class: local_polling`, `requirements: []` — no
 third-party deps; `api.py` uses only `requests`, which HA already ships. Repo
 `TheIcelandicguy/huawei_ont`, branch `main`; HACS custom repo, min HA `2024.1.0`.
@@ -25,7 +25,7 @@ custom_components/huawei_ont/
   sensor.py binary_sensor.py switch.py button.py device_tracker.py
   services.py + services.yaml   set_static_ip / clear_static_ip
   oui.py + oui_db.csv   offline IEEE OUI -> vendor; strings.json; translations/
-tests/  conftest.py, test_api.py (67), test_device_tracker.py (20), test_static_ip.py (15)
+tests/  conftest.py, test_api.py (70), test_device_tracker.py (20), test_static_ip.py (16)
 ```
 
 ## How it talks to the ONT (the non-obvious part)
@@ -52,6 +52,15 @@ session answers `302`/`403`, so `_fetch_page`/`_post` must keep
 carrying the login form and the client stays logged out forever. On 302/403 it
 re-authenticates once and retries; a failed login backs off 60 s
 (`_auth_blocked_until`) to stay clear of the brute-force lockout.
+
+**Dead sockets are not failed logins.** The ONT closes idle keep-alive sockets
+silently, so a login on the pooled connection dies with `RemoteDisconnected` /
+`BrokenPipe` (a `requests.ConnectionError`). `authenticate()` discards the
+session and retries once on a fresh one after `LOGIN_RETRY_DELAY` (2 s); only a
+second failure, or a rejected login, starts the 60 s backoff. Before this, each
+such drop cost a 60 s backoff, i.e. one failed poll and ~25 outages in two days.
+The coordinator also absorbs one failed poll in a row (`TOLERATED_MISSES`,
+keeping the last data); the second marks the entities unavailable.
 
 ### Parsing: JavaScript constructors, not JSON
 

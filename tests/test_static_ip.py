@@ -347,3 +347,38 @@ async def test_free_addresses_exclude_the_router_devices_and_reservations(
     assert not {"192.168.0.1", "192.168.0.42", "192.168.0.43",
                 "192.168.0.50"} & set(free)
     assert "192.168.0.2" in free
+
+
+async def test_one_failed_poll_keeps_the_last_data_and_two_do_not(
+    hass: HomeAssistant,
+):
+    """A single dropped session must not flip every entity unavailable."""
+    from homeassistant.helpers.update_coordinator import UpdateFailed
+
+    from custom_components.huawei_ont.api import HuaweiOntConnectionError
+    from custom_components.huawei_ont.coordinator import HuaweiOntCoordinator
+
+    good = router_data()
+
+    class Api:
+        fail = False
+
+        def get_router_data(self):
+            if self.fail:
+                raise HuaweiOntConnectionError("no data")
+            return good
+
+    api = Api()
+    coordinator = HuaweiOntCoordinator(hass, api, 30)
+    assert await coordinator._async_update_data() is good
+    coordinator.data = good
+
+    api.fail = True
+    assert await coordinator._async_update_data() is good  # first miss absorbed
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()  # second in a row is real
+
+    api.fail = False
+    assert await coordinator._async_update_data() is good  # and it resets
+    api.fail = True
+    assert await coordinator._async_update_data() is good

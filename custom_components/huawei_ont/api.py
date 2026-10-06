@@ -105,6 +105,8 @@ RE_HEX_ESCAPE = re.compile(r'\\x([0-9a-fA-F]{2})')
 # per-request timeouts: the device-list body is large and slow to render, the
 # little state polls are not and must not hold a poll open
 POST_TIMEOUT = 25
+# pause before the one login retry on a fresh connection
+LOGIN_RETRY_DELAY = 2
 STATE_POST_TIMEOUT = 10
 
 
@@ -457,42 +459,71 @@ class HuaweiOntApi:
         if time.monotonic() < self._auth_blocked_until:
             _LOGGER.debug("Skipping login attempt during backoff window")
             return False
-        session = self._ensure_session()
         # tokens are tied to the old session, so they never survive a login
         self._user_dev_token = None
-        try:
-            r = session.post(f"{self._base_url}{URL_GET_RAND_COUNT}", timeout=10)
-            token = r.text.strip().strip('﻿')
+        for attempt in (1, 2):
+            session = self._ensure_session()
+            try:
+                return self._login(session)
+            except requests.ConnectionError as err:
+                # The router closes idle keep-alive sockets without a word, so
+                # the next request on the pooled connection dies with
+                # RemoteDisconnected/BrokenPipe. That says nothing about the
+                # credentials: throw the session away and try once on a fresh
+                # connection before declaring the login failed and backing off.
+                self._drop_session()
+                if attempt == 1:
+                    _LOGGER.info(
+                        "Login hit a dead connection (%s); retrying on a "
+                        "fresh one", err,
+                    )
+                    time.sleep(LOGIN_RETRY_DELAY)
+                    continue
+                _LOGGER.error("Authentication error: %s", err)
+            except Exception as err:
+                _LOGGER.error("Authentication error: %s", err)
+            break
+        self._authenticated = False
+        self._auth_blocked_until = time.monotonic() + 60
+        return False
 
-            pwd_b64 = base64.b64encode(self._password.encode()).decode()
-            r = session.post(
-                f"{self._base_url}{URL_LOGIN}",
-                data={
-                    "UserName": self._username,
-                    "PassWord": pwd_b64,
-                    "Language": "english",
-                    "x.X_HW_Token": token,
-                },
-                allow_redirects=False,
-                timeout=10,
-            )
+    def _drop_session(self) -> None:
+        if self._session is not None:
+            try:
+                self._session.close()
+            except Exception:  # noqa: BLE001 - already discarding it
+                pass
+        self._session = None
+        self._authenticated = False
 
-            if r.status_code == 200 and "CookieHttps" in session.cookies:
-                self._authenticated = True
-                self._auth_generation += 1
-                _LOGGER.debug("Authentication successful")
-                return True
+    def _login(self, session: requests.Session) -> bool:
+        """One login attempt. Raises on transport errors, False on rejection."""
+        r = session.post(f"{self._base_url}{URL_GET_RAND_COUNT}", timeout=10)
+        token = r.text.strip().strip('﻿')
 
-            _LOGGER.error("Login failed: status %d", r.status_code)
-            self._authenticated = False
-            self._auth_blocked_until = time.monotonic() + 60
-            return False
+        pwd_b64 = base64.b64encode(self._password.encode()).decode()
+        r = session.post(
+            f"{self._base_url}{URL_LOGIN}",
+            data={
+                "UserName": self._username,
+                "PassWord": pwd_b64,
+                "Language": "english",
+                "x.X_HW_Token": token,
+            },
+            allow_redirects=False,
+            timeout=10,
+        )
 
-        except Exception as err:
-            _LOGGER.error("Authentication error: %s", err)
-            self._authenticated = False
-            self._auth_blocked_until = time.monotonic() + 60
-            return False
+        if r.status_code == 200 and "CookieHttps" in session.cookies:
+            self._authenticated = True
+            self._auth_generation += 1
+            _LOGGER.debug("Authentication successful")
+            return True
+
+        _LOGGER.error("Login failed: status %d", r.status_code)
+        self._authenticated = False
+        self._auth_blocked_until = time.monotonic() + 60
+        return False
 
     def _fetch_page(self, path: str) -> str | None:
         session = self._ensure_session()
