@@ -8,6 +8,17 @@ third-party deps; `api.py` uses only `requests`, which HA already ships. Repo
 
 Before ending a session, run `python check_docs.py` and update this file.
 
+**The Claude skill for this repo is kept here, not only on claude.ai.** It is
+`.claude/skills/huawei-ont-dev/SKILL.md`, which Claude Code loads from the clone. Update
+it in the same PR as the change it describes, and when you cut a release (its
+description quotes the version; `check_docs.py` fails when that is stale).
+claude.ai and Cowork read their own library and nothing pushes to it. After you
+change the skill, run `python build_skill.py --out "E:\skills for update claude_ai"`
+(Davíð's hand-off folder) and **tell him the file is ready to upload** under
+Customize > Skills, then to ask a new chat for the version. Say it in the final
+message of the session, not just in a commit. `check_docs.py` warns while the copy
+claude.ai syncs back under `~/.claude/skills/synced/` differs from the repo.
+
 Developed against a **Huawei OptiXstar V261a-20 GE Terminal**, firmware
 `V5R023C10S319` (README). **GE uplink, not GPON**: no SFP, so optical TX/RX power
 read `--` while board temperature and supply voltage still work. Model, serial and
@@ -25,7 +36,8 @@ custom_components/huawei_ont/
   sensor.py binary_sensor.py switch.py button.py device_tracker.py
   services.py + services.yaml   set_static_ip / clear_static_ip
   oui.py + oui_db.csv   offline IEEE OUI -> vendor; strings.json; translations/
-tests/  conftest.py, test_api.py (70), test_device_tracker.py (20), test_static_ip.py (16)
+build_skill.py  zips .claude/skills/<name>/ into a .skill for claude.ai upload
+tests/  conftest.py, test_api.py (70), test_device_tracker.py (20), test_static_ip.py (17)
 ```
 
 ## How it talks to the ONT (the non-obvious part)
