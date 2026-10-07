@@ -11,3 +11,12 @@ Thumbs.db
 .idea/
 .vscode/
 AGENTS.md
+
+# Local Claude Code settings anywhere in the tree
+.claude/*
+**/.claude/*
+# ...but the Claude Code skills kept with the code are tracked
+!/.claude/skills/
+
+# Built by build_skill.py
+dist-skill/
